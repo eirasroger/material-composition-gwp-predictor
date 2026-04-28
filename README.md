@@ -3,8 +3,13 @@ Deep learning model to predict Global Warming Potential (GWP) of construction pr
 
 # Input features
 - Material composition: name, percentage -> embedding (300 dimensions)
-- Product category (one-hot encoded)
+- Product category (one-hot encoded). Probably c-PCR based
 - Circularity (5 dimensions: circular origin, future use recycling, future use inert landfilling, future use incineration, future use hazardous waste)
 
 # Output feature
 - total ghg (1 dimension)
+
+
+
+# Dataset 
+- aprox 8800 construction products. Not all of them have specific c-PCR
