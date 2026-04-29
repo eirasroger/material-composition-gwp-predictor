@@ -13,3 +13,7 @@ Deep learning model to predict Global Warming Potential (GWP) of construction pr
 
 # Dataset 
 - aprox 8800 construction products. Not all of them have specific c-PCR
+
+
+# Core process
+The model learns to map product composition to GWP using material embeddings weighted by their proportions, with product category added as a contextual signal to refine the prediction. When a specific PCR is available, that context is used to narrow the category representation; when it is not, the model falls back to a generic `N/A` context so inference can still proceed, albeit with less specificity.
