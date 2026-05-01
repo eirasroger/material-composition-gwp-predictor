@@ -7,7 +7,6 @@ import re
 from typing import List, Optional
 
 import numpy as np
-from sklearn.metrics import r2_score
 
 from src.config import MATERIAL_VARIATIONS, STOP_WORDS
 
@@ -47,7 +46,11 @@ def tokenise_material(text: str) -> List[str]:
 def r2_safe(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     if len(y_true) < 2:
         return float("nan")
-    return float(r2_score(y_true, y_pred))
+    ss_res = np.sum((y_true - y_pred) ** 2)
+    ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
+    if ss_tot == 0:
+        return float("nan")
+    return float(1.0 - ss_res / ss_tot)
 
 
 def normalise_shares_to_100(values: List[float]) -> List[float]:
