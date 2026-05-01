@@ -211,6 +211,8 @@ __marimo__/
 # Folders
 wiki-news-300d-1M/
 GoogleNews-vectors-negative300/
+figures/
 
 # Files
 dataset.json
+diagnostics_ghg.json
