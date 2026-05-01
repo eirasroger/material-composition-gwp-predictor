@@ -16,6 +16,12 @@ import customtkinter as ctk
 
 from desktop_app.inference_adapter import InferenceAdapter
 from desktop_app.ui.main_window import MainWindow
+from desktop_app.updater import check_for_updates
+
+try:
+    from desktop_app._version import __version__
+except ImportError:
+    __version__ = "0.0.0"
 
 
 def main() -> int:
@@ -37,6 +43,7 @@ def main() -> int:
         return 2
 
     app = MainWindow(adapter)
+    check_for_updates(app, __version__)
     app.mainloop()
     return 0
 

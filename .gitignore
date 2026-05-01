@@ -218,6 +218,9 @@ figures/
 dataset.json
 diagnostics_ghg.json
 
+# Generated at build time by build.ps1 — never commit the real version string.
+desktop_app/_version.py
+
 # Desktop app build artifacts (kept local; produced by build.ps1).
 # `assets/` IS committed — it's tiny (~1.3 MB total) and CI needs it to build
 # without re-running bake_assets.py (which would need dataset.json + fastText).

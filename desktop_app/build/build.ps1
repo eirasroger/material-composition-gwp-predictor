@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     End-to-end Windows release build for the GHG Predictor desktop app.
 
@@ -68,6 +68,15 @@ if ($SkipBake) {
     & $PythonExe desktop_app\tools\bake_assets.py
     if ($LASTEXITCODE -ne 0) { throw "bake_assets.py exited with $LASTEXITCODE" }
 }
+
+# Write _version.py so the frozen app knows its own version for update checks.
+$versionFile = Join-Path $RepoRoot "desktop_app\_version.py"
+[System.IO.File]::WriteAllText(
+    $versionFile,
+    "__version__ = `"$Version`"`n",
+    [System.Text.Encoding]::ASCII
+)
+Write-Host "    Wrote desktop_app\_version.py ($Version)"
 
 # ── 2. PyInstaller one-folder build ──────────────────────────────────────────
 Write-Host "`n[2/3] Running PyInstaller ..." -ForegroundColor Cyan
