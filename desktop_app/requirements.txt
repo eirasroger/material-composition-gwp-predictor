@@ -1,0 +1,15 @@
+# Runtime + build dependencies for the desktop app.
+# Install on top of the project venv:  .venv\Scripts\python.exe -m pip install -r desktop_app\requirements.txt
+#
+# Note: torch is pulled from the CPU-only PyTorch index to keep the bundle small
+# (~200 MB instead of ~700+ MB). If your venv already has the CUDA torch, that's
+# fine for development — switch to CPU only when you build for distribution.
+--index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://pypi.org/simple
+
+customtkinter>=5.2
+darkdetect>=0.8
+matplotlib>=3.8
+numpy>=1.26
+torch>=2.2
+pyinstaller>=6.0

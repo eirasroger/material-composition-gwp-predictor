@@ -212,7 +212,21 @@ __marimo__/
 wiki-news-300d-1M/
 GoogleNews-vectors-negative300/
 figures/
+.claude/
 
 # Files
 dataset.json
 diagnostics_ghg.json
+
+# Desktop app build artifacts (kept local; produced by build.ps1).
+# `assets/` IS committed — it's tiny (~1.3 MB total) and CI needs it to build
+# without re-running bake_assets.py (which would need dataset.json + fastText).
+desktop_app/build/out/
+desktop_app/build/work/
+
+# But DO keep the build scripts themselves, even though `build/` and `*.spec`
+# above would otherwise eat them.
+!desktop_app/build/
+!desktop_app/build/*.spec
+!desktop_app/build/*.iss
+!desktop_app/build/*.ps1

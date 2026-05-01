@@ -96,6 +96,13 @@ After a run, the following files are written to the repo root:
 ### Configuration
 All paths and hyperparameters live in `src/config.py` (`EMBED_DIM`, `HIDDEN_DIMS`, `LR`, `EPOCHS`, `BATCH_SIZE`, `GHG_MIN`/`GHG_MAX`, `MIN_CATEGORY_COUNT`, embedding backend, etc.).
 
+## Desktop app
+
+A standalone Windows desktop app wraps the trained model in a clickable GUI: pick a product category, edit material composition (sliders + searchable material names), end-of-life shares, and circular-origin %, and watch the predicted GHG update live.
+
+- **Users**: download `GHGPredictorSetup-<version>.exe` from the [Releases page](https://github.com/eirasroger/material-composition-gwp-predictor/releases), run it (no admin rights, no Python needed), launch from Start Menu.
+- **Developers**: see [`desktop_app/README.md`](desktop_app/README.md) for build steps. The app lives entirely under `desktop_app/` and reuses the same training/inference code from `src/`.
+
 ## Contact
 
 Roger Vergés - Corresponding author and lead developer - [roger.verges.eiras@upc.edu](mailto:roger.verges.eiras@upc.edu)<a href="https://orcid.org/0009-0001-5887-4785" aria-label="ORCID"><img src="https://orcid.org/sites/default/files/images/orcid_16x16.png" alt="ORCID iD" width="16" height="16" style="vertical-align: text-bottom; margin-left: 4px;"></a>

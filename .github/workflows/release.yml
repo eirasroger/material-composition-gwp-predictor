@@ -1,0 +1,97 @@
+name: Release desktop installer
+
+# Triggers on:
+#   - Pushing a semver tag like v0.1.0 / v1.2.3 / v1.0.0-rc1 → builds + publishes
+#     a GitHub Release with the .exe attached. Tags containing a hyphen are
+#     marked as pre-releases.
+#   - Manual run via the Actions tab — useful for smoke-testing the workflow
+#     without cutting a real release; produces a draft release named "test".
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version string baked into the installer (e.g. 0.1.0-test)"
+        required: true
+        default: "0.0.0-test"
+
+permissions:
+  contents: write   # needed to create / upload to a Release
+
+jobs:
+  build-installer:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: desktop_app/requirements.txt
+
+      - name: Install desktop app dependencies (CPU torch)
+        run: python -m pip install -r desktop_app/requirements.txt
+        shell: pwsh
+
+      - name: Resolve version
+        id: ver
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -like "refs/tags/*") {
+            $tag = "$env:GITHUB_REF" -replace '^refs/tags/', ''
+            $version = $tag -replace '^v', ''
+          } else {
+            $version = "${{ github.event.inputs.version }}"
+            $tag     = "v$version"
+          }
+          $isPre = if ($version -match '-') { "true" } else { "false" }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "tag=$tag"         | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "prerelease=$isPre"| Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Building version=$version tag=$tag prerelease=$isPre"
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          .\desktop_app\build\build.ps1 `
+            -Version "${{ steps.ver.outputs.version }}" `
+            -PythonExe "python" `
+            -SkipBake
+
+      - name: Locate installer artifact
+        id: artifact
+        shell: pwsh
+        run: |
+          $path = "desktop_app\build\out\GHGPredictorSetup-${{ steps.ver.outputs.version }}.exe"
+          if (-not (Test-Path $path)) { throw "Installer not found at $path" }
+          $sizeMB = "{0:N1}" -f ((Get-Item $path).Length / 1MB)
+          Write-Host "Installer: $path ($sizeMB MB)"
+          "path=$path"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "size_mb=$sizeMB"| Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Upload as workflow artifact (manual runs)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: GHGPredictorSetup-${{ steps.ver.outputs.version }}
+          path: ${{ steps.artifact.outputs.path }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish GitHub Release (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: GHG Predictor ${{ steps.ver.outputs.version }}
+          prerelease: ${{ steps.ver.outputs.prerelease }}
+          files: ${{ steps.artifact.outputs.path }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
