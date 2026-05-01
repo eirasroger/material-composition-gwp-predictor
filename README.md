@@ -58,7 +58,7 @@ pip install -r requirements.txt
 ### Windows (cmd)
 ```cmd
 python -m venv .venv
-.venv\Scripts\activate.bat
+.venv\Scripts\activate
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
