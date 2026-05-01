@@ -37,6 +37,7 @@ OutputBaseFilename=GHGPredictorSetup-{#MyAppVersion}
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=..\assets\icon.ico
 
 ; Block install on anything older than Windows 10.
 MinVersion=10.0

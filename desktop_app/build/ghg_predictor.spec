@@ -28,6 +28,7 @@ asset_files = [
     (str(APP_DIR / "assets" / "ghg_model.pt"),  "assets"),
     (str(APP_DIR / "assets" / "vocab.npz"),     "assets"),
     (str(APP_DIR / "assets" / "materials.json"), "assets"),
+    (str(APP_DIR / "assets" / "icon.ico"),       "assets"),
 ]
 
 a = Analysis(
@@ -61,6 +62,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
+    icon=str(APP_DIR / "assets" / "icon.ico"),
     console=False,           # GUI app — no console window
     disable_windowed_traceback=False,
     argv_emulation=False,

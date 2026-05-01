@@ -6,6 +6,8 @@ callback that drives ``InferenceAdapter.predict``.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from typing import Dict, List
 
 import customtkinter as ctk
@@ -22,6 +24,12 @@ from src.utils import normalise_shares_to_100
 DEBOUNCE_MS = 150
 
 
+def _icon_path() -> Path:
+    base = Path(getattr(sys, "_MEIPASS", "")) / "assets" if getattr(sys, "frozen", False) \
+        else Path(__file__).resolve().parents[1] / "assets"
+    return base / "icon.ico"
+
+
 class MainWindow(ctk.CTk):
     def __init__(self, adapter: InferenceAdapter) -> None:
         super().__init__()
@@ -30,6 +38,13 @@ class MainWindow(ctk.CTk):
         self.title("GHG Predictor")
         self.geometry("1180x780")
         self.minsize(980, 700)
+
+        icon = _icon_path()
+        if icon.exists():
+            try:
+                self.iconbitmap(str(icon))
+            except Exception:
+                pass
 
         self._pending_after: str | None = None
 
