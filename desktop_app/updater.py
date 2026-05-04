@@ -326,6 +326,11 @@ def _spawn_installer_and_restart(installer_path: str) -> None:
     CREATE_NEW_PROCESS_GROUP = 0x00000200
     CREATE_NO_WINDOW = 0x08000000
 
+    # stdin/stdout/stderr must be explicit DEVNULL: the frozen app is built with
+    # console=False, so the parent has no std handles. Without these, Popen
+    # inherits "nothing" and powershell.exe exits immediately on launch — the
+    # script never runs and no log is ever written. (PyInstaller --noconsole
+    # gotcha.)
     subprocess.Popen(
         [
             "powershell.exe",
@@ -334,6 +339,9 @@ def _spawn_installer_and_restart(installer_path: str) -> None:
             "-WindowStyle", "Hidden",
             "-File", script_path,
         ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
         close_fds=True,
     )
