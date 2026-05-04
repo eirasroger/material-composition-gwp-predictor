@@ -34,6 +34,7 @@ asset_files = [
     (str(APP_DIR / "assets" / "materials.json"),      "assets"),
     (str(APP_DIR / "assets" / "icon.ico"),            "assets"),
     (str(APP_DIR / "assets" / "icon_vector.svg"),     "assets"),
+    (str(APP_DIR / "assets" / "theme_dark.json"),     "assets"),
 ]
 
 a = Analysis(
