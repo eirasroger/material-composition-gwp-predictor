@@ -22,21 +22,26 @@ REPO_ROOT = APP_DIR.parent                  # repo root
 # customtkinter ships theme JSON / icons that PyInstaller doesn't auto-detect.
 ctk_datas, ctk_binaries, ctk_hidden = collect_all("customtkinter")
 
+# PyMuPDF (fitz) ships compiled extensions that need explicit collection.
+fitz_datas, fitz_binaries, fitz_hidden = collect_all("fitz")
+
 # Bundle the baked assets under "assets/" inside the frozen tree, so
-# inference_adapter._default_assets_dir() finds them via sys._MEIPASS / assets.
+# inference_adapter._default_assets_dir() and splash._assets_dir() find them
+# via sys._MEIPASS / assets.
 asset_files = [
-    (str(APP_DIR / "assets" / "ghg_model.pt"),  "assets"),
-    (str(APP_DIR / "assets" / "vocab.npz"),     "assets"),
-    (str(APP_DIR / "assets" / "materials.json"), "assets"),
-    (str(APP_DIR / "assets" / "icon.ico"),       "assets"),
+    (str(APP_DIR / "assets" / "ghg_model.pt"),       "assets"),
+    (str(APP_DIR / "assets" / "vocab.npz"),           "assets"),
+    (str(APP_DIR / "assets" / "materials.json"),      "assets"),
+    (str(APP_DIR / "assets" / "icon.ico"),            "assets"),
+    (str(APP_DIR / "assets" / "icon_vector.svg"),     "assets"),
 ]
 
 a = Analysis(
     [str(APP_DIR / "app.py")],
     pathex=[str(REPO_ROOT)],
-    binaries=ctk_binaries,
-    datas=ctk_datas + asset_files,
-    hiddenimports=ctk_hidden + [
+    binaries=ctk_binaries + fitz_binaries,
+    datas=ctk_datas + fitz_datas + asset_files,
+    hiddenimports=ctk_hidden + fitz_hidden + [
         "darkdetect",
         "matplotlib.backends.backend_tkagg",
     ],

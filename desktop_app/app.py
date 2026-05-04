@@ -1,8 +1,8 @@
 """
 Desktop GUI entrypoint.
 
-Loads the trained model + baked vocab once via ``InferenceAdapter`` and shows
-the main window. Run with::
+Shows a splash screen while loading the model + baked vocab via
+``InferenceAdapter``, then opens the main window. Run with::
 
     python -m desktop_app.app
 """
@@ -15,6 +15,7 @@ import traceback
 import customtkinter as ctk
 
 from desktop_app.inference_adapter import InferenceAdapter
+from desktop_app.splash import SplashScreen
 from desktop_app.ui.main_window import MainWindow
 from desktop_app.updater import check_for_updates
 
@@ -29,7 +30,11 @@ def main() -> int:
     ctk.set_default_color_theme("blue")
 
     try:
-        adapter = InferenceAdapter()
+        adapter = SplashScreen(
+            app_name="GHG Predictor",
+            loading_func=InferenceAdapter,
+            min_display_s=2.0,
+        ).run()
     except FileNotFoundError as exc:
         print(f"[ghg-predictor] {exc}", file=sys.stderr)
         print(
