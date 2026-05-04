@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import sys
 import traceback
+from pathlib import Path
 
 import customtkinter as ctk
 
@@ -26,8 +27,9 @@ except ImportError:
 
 
 def main() -> int:
-    ctk.set_appearance_mode("system")
-    ctk.set_default_color_theme("blue")
+    ctk.set_appearance_mode("dark")
+    _theme = Path(__file__).resolve().parent / "assets" / "theme_dark.json"
+    ctk.set_default_color_theme(str(_theme))
 
     try:
         adapter = SplashScreen(

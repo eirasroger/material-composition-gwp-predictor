@@ -116,16 +116,17 @@ class SplashScreen:
         ctk.CTkLabel(
             self.root, text=app_name,
             font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold"),
-        ).pack(pady=(0, 8))
+            text_color="#e4f0ec",
+        ).pack(pady=(0, 6))
         ctk.CTkLabel(
-            self.root, text="Loading...",
-            font=ctk.CTkFont(family="Segoe UI", size=13),
-            text_color="#888888",
+            self.root, text="Loading model...",
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            text_color="#7aada0",
         ).pack(pady=(0, 24))
 
         self.progress = ctk.CTkProgressBar(
             self.root, width=240, height=3, corner_radius=2,
-            progress_color="#22bb66", fg_color="#333333",
+            progress_color="#3ecf8e", fg_color="#2b3c37",
             mode="indeterminate",
         )
         self.progress.pack()
@@ -179,8 +180,11 @@ class SplashScreen:
 
 
 if __name__ == "__main__":
-    ctk.set_appearance_mode("system")
-    ctk.set_default_color_theme("blue")
+    from pathlib import Path as _Path
+    ctk.set_appearance_mode("dark")
+    ctk.set_default_color_theme(
+        str(_Path(__file__).resolve().parent / "assets" / "theme_dark.json")
+    )
 
     def _mock_load():
         time.sleep(3.0)

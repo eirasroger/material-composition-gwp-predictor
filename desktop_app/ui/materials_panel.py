@@ -14,6 +14,7 @@ from typing import Callable, Dict, List, Optional
 
 import customtkinter as ctk
 
+from desktop_app.ui.theme import BORDER, SURFACE, TEXT_SEC, font
 from desktop_app.ui.widgets import PercentSlider, SearchableDropdown, SumIndicator
 from src.utils import normalise_shares_to_100
 
@@ -46,6 +47,10 @@ class _MaterialRow(ctk.CTkFrame):
 
         ctk.CTkButton(
             self, text="✕", width=28, height=28,
+            fg_color="transparent",
+            hover_color=BORDER,
+            text_color=TEXT_SEC,
+            font=font(12),
             command=lambda: self._on_remove(self),
         ).pack(side="left")
 
@@ -69,28 +74,48 @@ class MaterialsPanel(ctk.CTkFrame):
         material_choices: List[str],
         on_change: Optional[Callable[[List[Dict[str, float]]], None]] = None,
     ) -> None:
-        super().__init__(master)
+        super().__init__(master, fg_color=SURFACE, corner_radius=8)
         self._material_choices = sorted(material_choices, key=str.lower)
         self._on_change = on_change
         self._rows: List[_MaterialRow] = []
 
         ctk.CTkLabel(
-            self, text="Materials", font=ctk.CTkFont(weight="bold"),
-        ).pack(anchor="w", padx=10, pady=(10, 0))
+            self, text="Material Composition",
+            font=font(13, "bold"),
+        ).pack(anchor="w", padx=14, pady=(14, 2))
+
+        ctk.CTkLabel(
+            self,
+            text="Add materials and set their percentage share.",
+            font=font(11),
+            text_color=TEXT_SEC,
+            anchor="w",
+        ).pack(fill="x", padx=14, pady=(0, 8))
 
         self._rows_holder = ctk.CTkFrame(self, fg_color="transparent")
-        self._rows_holder.pack(fill="x", padx=10, pady=(4, 4))
+        self._rows_holder.pack(fill="x", padx=14, pady=(0, 6))
 
         controls = ctk.CTkFrame(self, fg_color="transparent")
-        controls.pack(fill="x", padx=10, pady=(0, 4))
+        controls.pack(fill="x", padx=14, pady=(0, 6))
 
-        ctk.CTkButton(controls, text="+ Add material", width=120,
-                      command=self._add_row).pack(side="left")
-        ctk.CTkButton(controls, text="Autoscale to 100%", width=140,
-                      command=self._autoscale).pack(side="left", padx=(8, 0))
+        ctk.CTkButton(
+            controls, text="+ Add material", width=130, height=30,
+            font=font(12, "bold"),
+            command=self._add_row,
+        ).pack(side="left")
+        ctk.CTkButton(
+            controls, text="Autoscale to 100%", width=150, height=30,
+            font=font(12),
+            fg_color="transparent",
+            border_width=1,
+            border_color=BORDER,
+            text_color=TEXT_SEC,
+            hover_color=BORDER,
+            command=self._autoscale,
+        ).pack(side="left", padx=(8, 0))
 
         self._sum_indicator = SumIndicator(self)
-        self._sum_indicator.pack(fill="x", padx=10, pady=(0, 10))
+        self._sum_indicator.pack(fill="x", padx=14, pady=(2, 14))
 
         self._add_row()
 
@@ -141,10 +166,14 @@ class MaterialsPanel(ctk.CTkFrame):
 
 
 def _smoke() -> None:
-    ctk.set_appearance_mode("system")
+    from pathlib import Path
+    ctk.set_appearance_mode("dark")
+    ctk.set_default_color_theme(
+        str(Path(__file__).resolve().parents[1] / "assets" / "theme_dark.json")
+    )
     root = ctk.CTk()
     root.title("materials_panel.py smoke test")
-    root.geometry("720x520")
+    root.geometry("720x540")
 
     def report(materials):
         print("materials =", materials)

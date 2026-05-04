@@ -6,6 +6,7 @@ from typing import Callable, List, Optional
 
 import customtkinter as ctk
 
+from desktop_app.ui.theme import SURFACE, TEXT_SEC, font
 from desktop_app.ui.widgets import SearchableDropdown
 
 
@@ -16,19 +17,28 @@ class CategoryPanel(ctk.CTkFrame):
         categories: List[str],
         on_change: Optional[Callable[[Optional[str]], None]] = None,
     ) -> None:
-        super().__init__(master)
+        super().__init__(master, fg_color=SURFACE, corner_radius=8)
         self._categories = sorted(categories, key=str.lower)
         self._on_change = on_change
 
         ctk.CTkLabel(
-            self, text="Product category", font=ctk.CTkFont(weight="bold"),
-        ).pack(anchor="w", padx=10, pady=(10, 0))
+            self, text="Product Category",
+            font=font(13, "bold"),
+        ).pack(anchor="w", padx=14, pady=(14, 2))
+
+        ctk.CTkLabel(
+            self,
+            text="Select the EPD product category.",
+            font=font(11),
+            text_color=TEXT_SEC,
+            anchor="w",
+        ).pack(fill="x", padx=14, pady=(0, 6))
 
         self._dropdown = SearchableDropdown(
             self, values=self._categories, command=self._handle_select,
             placeholder="Type to search ...",
         )
-        self._dropdown.pack(fill="x", padx=10, pady=(4, 10))
+        self._dropdown.pack(fill="x", padx=14, pady=(0, 14))
 
     def selected(self) -> Optional[str]:
         v = self._dropdown.get()
@@ -40,10 +50,14 @@ class CategoryPanel(ctk.CTkFrame):
 
 
 def _smoke() -> None:
-    ctk.set_appearance_mode("system")
+    from pathlib import Path
+    ctk.set_appearance_mode("dark")
+    ctk.set_default_color_theme(
+        str(Path(__file__).resolve().parents[1] / "assets" / "theme_dark.json")
+    )
     root = ctk.CTk()
     root.title("category_panel.py smoke test")
-    root.geometry("520x180")
+    root.geometry("520x200")
 
     panel = CategoryPanel(
         root,

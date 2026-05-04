@@ -18,6 +18,7 @@ from desktop_app.ui.eol_panel import EolPanel
 from desktop_app.ui.materials_panel import MaterialsPanel
 from desktop_app.ui.origin_panel import OriginPanel
 from desktop_app.ui.prediction_panel import PredictionPanel
+from desktop_app.ui.theme import ACCENT, BG, BORDER, SURFACE, font
 from src.utils import normalise_shares_to_100
 
 
@@ -36,8 +37,9 @@ class MainWindow(ctk.CTk):
         self.adapter = adapter
 
         self.title("GHG Predictor")
-        self.geometry("1180x780")
+        self.geometry("1200x800")
         self.minsize(980, 700)
+        self.configure(fg_color=BG)
 
         icon = _icon_path()
         if icon.exists():
@@ -53,14 +55,22 @@ class MainWindow(ctk.CTk):
         self.grid_rowconfigure(0, weight=1)
 
         # ── left column: scrollable input stack ───────────────────────────────
-        left = ctk.CTkScrollableFrame(self, label_text="Configuration")
+        left = ctk.CTkScrollableFrame(
+            self,
+            label_text="  Configuration",
+            label_font=font(12, "bold"),
+            label_fg_color=BORDER,
+            fg_color=BG,
+            scrollbar_button_color=BORDER,
+            scrollbar_button_hover_color=ACCENT,
+        )
         left.grid(row=0, column=0, sticky="nsew", padx=(12, 6), pady=12)
 
         self.category_panel = CategoryPanel(
             left, categories=self.adapter.categories,
             on_change=lambda _v: self._schedule_predict(),
         )
-        self.category_panel.pack(fill="x", pady=(0, 8))
+        self.category_panel.pack(fill="x", pady=(6, 8))
 
         self.materials_panel = MaterialsPanel(
             left, material_choices=self.adapter.materials,
@@ -79,7 +89,7 @@ class MainWindow(ctk.CTk):
         self.origin_panel.pack(fill="x", pady=(0, 8))
 
         # ── right column: prediction ──────────────────────────────────────────
-        right = ctk.CTkFrame(self)
+        right = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=10)
         right.grid(row=0, column=1, sticky="nsew", padx=(6, 12), pady=12)
         right.grid_rowconfigure(0, weight=1)
         right.grid_columnconfigure(0, weight=1)
