@@ -46,6 +46,12 @@ ArchitecturesInstallIn64BitMode=x64compatible
 
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
+; In-app updates: force-close any running instance so files are never in use.
+; With /VERYSILENT /SUPPRESSMSGBOXES the 'files in use' prompt would otherwise
+; default to Cancel and silently abort the install.
+CloseApplications=force
+RestartApplications=no
+
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 

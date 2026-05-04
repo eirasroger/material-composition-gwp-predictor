@@ -221,30 +221,119 @@ def _ps_quote(s: str) -> str:
     return "'" + s.replace("'", "''") + "'"
 
 
+_UPDATE_PS1_TEMPLATE = r"""
+$ErrorActionPreference = 'Continue'
+$parentPid   = {pid}
+$installer   = {installer}
+$installedExe= {installed_exe}
+$installDir  = {install_dir}
+$logFile     = {log_file}
+$installerLog= {installer_log}
+
+# Ensure log dir exists.
+$logDir = Split-Path $logFile -Parent
+if (-not (Test-Path $logDir)) {{ New-Item -ItemType Directory -Path $logDir -Force | Out-Null }}
+
+function Log($msg) {{
+    "[{{0}}] {{1}}" -f (Get-Date -Format 'o'), $msg | Out-File -FilePath $logFile -Encoding utf8 -Append
+}}
+
+Log "updater starting (parent pid=$parentPid)"
+
+# 1. Wait for the running app to exit so its files are no longer in use.
+try {{
+    $proc = Get-Process -Id $parentPid -ErrorAction SilentlyContinue
+    if ($proc) {{
+        Log "waiting for parent to exit (timeout 30s)"
+        Wait-Process -Id $parentPid -Timeout 30 -ErrorAction SilentlyContinue
+    }} else {{
+        Log "parent already exited"
+    }}
+}} catch {{ Log "Wait-Process error: $_" }}
+
+# 2. Force-kill any lingering GHGPredictor.exe instances. The PyInstaller bundle
+#    holds DLLs in _internal\ that the silent installer cannot overwrite while
+#    open; with /SUPPRESSMSGBOXES, the 'files in use' prompt defaults to Cancel
+#    which silently aborts the install. Killing first prevents that.
+try {{
+    Get-Process -Name 'GHGPredictor' -ErrorAction SilentlyContinue |
+        ForEach-Object {{ Log "killing leftover pid=$($_.Id)"; $_ | Stop-Process -Force -ErrorAction SilentlyContinue }}
+}} catch {{ Log "Stop-Process error: $_" }}
+
+# 3. Brief pause so Windows finishes releasing file handles.
+Start-Sleep -Seconds 2
+
+# 4. Run the installer fully silently. /TASKS=desktopicon force-checks the
+#    desktop-shortcut task which is otherwise unchecked-by-default and would be
+#    skipped by /VERYSILENT.
+Log "launching installer: $installer"
+try {{
+    $p = Start-Process -FilePath $installer `
+        -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/TASKS=desktopicon',"/LOG=$installerLog" `
+        -Wait -PassThru
+    Log "installer exit code: $($p.ExitCode)"
+}} catch {{
+    Log "installer launch failed: $_"
+}}
+
+# 5. Restart the freshly installed app.
+if (Test-Path $installedExe) {{
+    Log "starting $installedExe"
+    try {{ Start-Process -FilePath $installedExe }} catch {{ Log "restart failed: $_" }}
+}} else {{
+    Log "installed exe not found at $installedExe"
+}}
+
+# 6. Self-delete this script.
+try {{ Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue }} catch {{ }}
+""".lstrip()
+
+
 def _spawn_installer_and_restart(installer_path: str) -> None:
     """
     Launch a detached helper that:
       1. Waits for the current process (this app) to exit so files are unlocked.
-      2. Runs the Inno Setup installer silently with no prompts.
-      3. Launches the freshly installed exe.
+      2. Force-kills any lingering GHGPredictor.exe before the installer runs so
+         /SUPPRESSMSGBOXES never hits a 'files in use' prompt (which defaults to
+         Cancel and silently aborts the install).
+      3. Runs the Inno Setup installer silently with /TASKS=desktopicon so the
+         desktop shortcut is created without user input.
+      4. Launches the freshly installed exe.
 
-    Runs as a fully detached PowerShell process so it survives our shutdown.
+    Writes the helper to a temp .ps1 file and runs it as a fully detached
+    process so it survives our shutdown. Logs to %LOCALAPPDATA%\\GHGPredictor\\
+    update.log to make future failures debuggable.
     """
     my_pid = os.getpid()
-    ps_cmd = (
-        f"Wait-Process -Id {my_pid} -ErrorAction SilentlyContinue; "
-        f"Start-Process -FilePath {_ps_quote(installer_path)} "
-        f"-ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait; "
-        f"if (Test-Path {_ps_quote(_INSTALLED_EXE)}) "
-        f"{{ Start-Process -FilePath {_ps_quote(_INSTALLED_EXE)} }}"
+    log_file = os.path.join(_INSTALL_DIR, "update.log")
+    installer_log = os.path.join(_INSTALL_DIR, "installer.log")
+
+    script = _UPDATE_PS1_TEMPLATE.format(
+        pid=my_pid,
+        installer=_ps_quote(installer_path),
+        installed_exe=_ps_quote(_INSTALLED_EXE),
+        install_dir=_ps_quote(_INSTALL_DIR),
+        log_file=_ps_quote(log_file),
+        installer_log=_ps_quote(installer_log),
     )
+
+    script_dir = tempfile.mkdtemp(prefix="ghg_update_")
+    script_path = os.path.join(script_dir, "update.ps1")
+    with open(script_path, "w", encoding="utf-8") as fh:
+        fh.write(script)
 
     DETACHED_PROCESS = 0x00000008
     CREATE_NEW_PROCESS_GROUP = 0x00000200
     CREATE_NO_WINDOW = 0x08000000
 
     subprocess.Popen(
-        ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps_cmd],
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-WindowStyle", "Hidden",
+            "-File", script_path,
+        ],
         creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
         close_fds=True,
     )
