@@ -18,7 +18,7 @@ from src.utils import normalise_shares_to_100
 
 class EolPanel(ctk.CTkFrame):
     LABELS = (
-        ("recycling",    "Recycling *"),
+        ("recycling",    "Recycling\u00b9"),
         ("hazardous",    "Hazardous waste"),
         ("inert",        "Inert landfilling"),
         ("incineration", "Incineration"),
@@ -57,7 +57,7 @@ class EolPanel(ctk.CTkFrame):
 
         ctk.CTkLabel(
             self,
-            text="* Recycling includes composting, valorisation, reconditioning and reuse.",
+            text="\u00b9 Recycling includes composting, valorisation, reconditioning and reuse.",
             font=font(10),
             text_color=TEXT_DIM,
             anchor="w",

@@ -110,6 +110,7 @@ def _show_dialog(parent: ctk.CTk, version: str, url: str) -> None:
     skip_btn.grid(row=0, column=1, padx=10)
 
     def _on_update() -> None:
+        dialog.grab_release()
         dialog.destroy()
         _show_update_splash(parent, url)
 
@@ -203,6 +204,8 @@ def _show_update_splash(parent: ctk.CTk, url: str) -> None:
 
             _spawn_installer_and_restart(dest)
             alive[0] = False
+            import time
+            time.sleep(3)
             parent.after(0, parent.destroy)
         except Exception as exc:
             alive[0] = False
