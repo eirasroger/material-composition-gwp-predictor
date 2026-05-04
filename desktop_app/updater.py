@@ -20,9 +20,15 @@ import customtkinter as ctk
 import tkinter as tk
 from PIL import ImageTk
 
+from desktop_app.splash import _assets_dir, _build_frames
+
 GITHUB_REPO = "eirasroger/material-composition-gwp-predictor"
 _API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 _REQUEST_TIMEOUT = 8
+
+# Inno Setup installs per-user under {localappdata}\GHGPredictor (see installer.iss).
+_INSTALL_DIR = os.path.join(os.environ.get("LOCALAPPDATA", ""), "GHGPredictor")
+_INSTALLED_EXE = os.path.join(_INSTALL_DIR, "GHGPredictor.exe")
 
 
 def check_for_updates(parent: ctk.CTk, current_version: str) -> None:
@@ -112,8 +118,6 @@ def _show_dialog(parent: ctk.CTk, version: str, url: str) -> None:
 
 def _show_update_splash(parent: ctk.CTk, url: str) -> None:
     """Frameless 'Updating...' splash while the installer downloads and runs silently."""
-    from splash import _build_frames, _assets_dir
-
     splash = ctk.CTkToplevel(parent)
     splash.overrideredirect(True)
     splash.attributes("-topmost", True)
@@ -142,11 +146,12 @@ def _show_update_splash(parent: ctk.CTk, url: str) -> None:
         font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold"),
         text_color="#e4f0ec",
     ).pack(pady=(0, 6))
-    ctk.CTkLabel(
-        splash, text="Updating...",
+    status_label = ctk.CTkLabel(
+        splash, text="Downloading update...",
         font=ctk.CTkFont(family="Segoe UI", size=12),
         text_color="#7aada0",
-    ).pack(pady=(0, 24))
+    )
+    status_label.pack(pady=(0, 24))
 
     progress = ctk.CTkProgressBar(
         splash, width=240, height=3, corner_radius=2,
@@ -187,9 +192,16 @@ def _show_update_splash(parent: ctk.CTk, url: str) -> None:
             tmpdir = tempfile.mkdtemp()
             dest = os.path.join(tmpdir, "GHGPredictorSetup.exe")
             urllib.request.urlretrieve(url, dest)
-            # /VERYSILENT + /SUPPRESSMSGBOXES: no wizard pages, no prompts
-            # /NORESTART: never auto-reboot after install
-            subprocess.Popen([dest, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"])
+
+            def _set_installing() -> None:
+                try:
+                    status_label.configure(text="Installing update...")
+                except Exception:
+                    pass
+
+            parent.after(0, _set_installing)
+
+            _spawn_installer_and_restart(dest)
             alive[0] = False
             parent.after(0, parent.destroy)
         except Exception as exc:
@@ -202,6 +214,40 @@ def _show_update_splash(parent: ctk.CTk, url: str) -> None:
             parent.after(0, _on_fail)
 
     threading.Thread(target=_download_worker, daemon=True).start()
+
+
+def _ps_quote(s: str) -> str:
+    """Quote a string for inclusion inside a PowerShell single-quoted literal."""
+    return "'" + s.replace("'", "''") + "'"
+
+
+def _spawn_installer_and_restart(installer_path: str) -> None:
+    """
+    Launch a detached helper that:
+      1. Waits for the current process (this app) to exit so files are unlocked.
+      2. Runs the Inno Setup installer silently with no prompts.
+      3. Launches the freshly installed exe.
+
+    Runs as a fully detached PowerShell process so it survives our shutdown.
+    """
+    my_pid = os.getpid()
+    ps_cmd = (
+        f"Wait-Process -Id {my_pid} -ErrorAction SilentlyContinue; "
+        f"Start-Process -FilePath {_ps_quote(installer_path)} "
+        f"-ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait; "
+        f"if (Test-Path {_ps_quote(_INSTALLED_EXE)}) "
+        f"{{ Start-Process -FilePath {_ps_quote(_INSTALLED_EXE)} }}"
+    )
+
+    DETACHED_PROCESS = 0x00000008
+    CREATE_NEW_PROCESS_GROUP = 0x00000200
+    CREATE_NO_WINDOW = 0x08000000
+
+    subprocess.Popen(
+        ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps_cmd],
+        creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
+        close_fds=True,
+    )
 
 
 def _show_error(parent: ctk.CTk, message: str) -> None:
