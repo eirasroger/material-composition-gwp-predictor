@@ -57,7 +57,7 @@ class MainWindow(ctk.CTk):
         # ── left column: scrollable input stack ───────────────────────────────
         left = ctk.CTkScrollableFrame(
             self,
-            label_text="  Configuration",
+            label_text="  Product configuration",
             label_font=font(12, "bold"),
             label_fg_color=BORDER,
             fg_color=BG,
