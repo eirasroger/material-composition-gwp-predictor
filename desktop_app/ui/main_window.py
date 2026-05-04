@@ -136,7 +136,7 @@ class MainWindow(ctk.CTk):
         eol_total = self.eol_panel.total()
         if abs(eol_total - 100.0) > 0.05:
             status_lines.append(
-                f"End-of-life shares sum to {eol_total:.1f}% — "
+                f"End-of-life pathways sum to {eol_total:.1f}% — "
                 "predicted as if normalised."
             )
 
