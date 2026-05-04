@@ -168,7 +168,7 @@ class SearchableDropdown(ctk.CTkFrame):
 
 
 class PercentSlider(ctk.CTkFrame):
-    """Label + 0-100 horizontal slider + numeric readout. Fires ``command(value)``."""
+    """Label + 0-100 horizontal slider + editable numeric entry. Fires ``command(value)``."""
 
     def __init__(
         self,
@@ -180,6 +180,8 @@ class PercentSlider(ctk.CTkFrame):
     ) -> None:
         super().__init__(master, fg_color="transparent")
         self._command = command
+        self._debounce_id: Optional[str] = None
+        self._updating = False
 
         if label_width > 0:
             self.label = ctk.CTkLabel(
@@ -190,34 +192,76 @@ class PercentSlider(ctk.CTkFrame):
 
         self._var = tk.DoubleVar(value=float(initial))
         self.slider = ctk.CTkSlider(
-            self, from_=0.0, to=100.0, number_of_steps=200,
+            self, from_=0.0, to=100.0, number_of_steps=1000,
             variable=self._var, command=self._on_slider,
             height=16,
         )
         self.slider.pack(side="left", fill="x", expand=True, padx=(0, 8))
 
-        self.readout = ctk.CTkLabel(
-            self, text=self._fmt(initial), width=56, anchor="e",
-            font=font(12), text_color=TEXT_PRI,
+        self.readout = ctk.CTkEntry(
+            self, width=60, font=font(12), justify="right",
         )
-        self.readout.pack(side="left")
+        self.readout.insert(0, self._fmt_entry(initial))
+        self.readout.pack(side="left", padx=(0, 2))
+        self.readout.bind("<Return>",    lambda _e: self._apply_entry())
+        self.readout.bind("<FocusOut>",  lambda _e: self._apply_entry())
+        self.readout.bind("<KeyRelease>", self._on_key_release)
+
+        ctk.CTkLabel(
+            self, text="%", width=16, anchor="w",
+            font=font(12), text_color=TEXT_SEC,
+        ).pack(side="left")
 
     def get(self) -> float:
         return float(self._var.get())
 
     def set(self, value: float) -> None:
+        if self._debounce_id is not None:
+            self.after_cancel(self._debounce_id)
+            self._debounce_id = None
         v = max(0.0, min(100.0, float(value)))
+        self._updating = True
         self._var.set(v)
-        self.readout.configure(text=self._fmt(v))
+        self._update_entry(v)
+        self._updating = False
 
     def _on_slider(self, value: float) -> None:
-        self.readout.configure(text=self._fmt(value))
+        if not self._updating:
+            self._update_entry(float(value))
+            if self._command is not None:
+                self._command(float(value))
+
+    def _update_entry(self, value: float) -> None:
+        self.readout.delete(0, "end")
+        self.readout.insert(0, self._fmt_entry(value))
+
+    def _on_key_release(self, _event) -> None:
+        if self._debounce_id is not None:
+            self.after_cancel(self._debounce_id)
+        self._debounce_id = self.after(1000, self._apply_entry)
+
+    def _apply_entry(self) -> None:
+        if self._updating:
+            return
+        if self._debounce_id is not None:
+            self.after_cancel(self._debounce_id)
+            self._debounce_id = None
+        try:
+            v = float(self.readout.get())
+        except ValueError:
+            self._update_entry(self._var.get())
+            return
+        v = max(0.0, min(100.0, v))
+        self._updating = True
+        self._var.set(v)
+        self._update_entry(v)
+        self._updating = False
         if self._command is not None:
-            self._command(float(value))
+            self._command(v)
 
     @staticmethod
-    def _fmt(v: float) -> str:
-        return f"{float(v):5.1f} %"
+    def _fmt_entry(v: float) -> str:
+        return f"{float(v):.1f}"
 
 
 class SumIndicator(ctk.CTkLabel):
