@@ -17,6 +17,8 @@ import urllib.request
 from typing import Optional, Tuple
 
 import customtkinter as ctk
+import tkinter as tk
+from PIL import ImageTk
 
 GITHUB_REPO = "eirasroger/material-composition-gwp-predictor"
 _API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -76,19 +78,17 @@ def _show_dialog(parent: ctk.CTk, version: str, url: str) -> None:
     dialog.transient(parent)
     dialog.grab_set()
 
-    # Center on parent
     w, h = 420, 170
     px = parent.winfo_x() + (parent.winfo_width() - w) // 2
     py = parent.winfo_y() + (parent.winfo_height() - h) // 2
     dialog.geometry(f"{w}x{h}+{px}+{py}")
 
-    msg = ctk.CTkLabel(
+    ctk.CTkLabel(
         dialog,
         text=f"Version {version} is available.\nWould you like to update now?",
         font=ctk.CTkFont(size=14),
         justify="center",
-    )
-    msg.pack(pady=(28, 18))
+    ).pack(pady=(28, 18))
 
     btn_row = ctk.CTkFrame(dialog, fg_color="transparent")
     btn_row.pack()
@@ -104,31 +104,124 @@ def _show_dialog(parent: ctk.CTk, version: str, url: str) -> None:
     skip_btn.grid(row=0, column=1, padx=10)
 
     def _on_update() -> None:
-        update_btn.configure(text="Downloading...", state="disabled")
-        skip_btn.configure(state="disabled")
-        threading.Thread(
-            target=_download_and_launch,
-            args=(url, parent, msg, skip_btn),
-            daemon=True,
-        ).start()
+        dialog.destroy()
+        _show_update_splash(parent, url)
 
     update_btn.configure(command=_on_update)
 
 
-def _download_and_launch(
-    url: str,
-    parent: ctk.CTk,
-    msg: ctk.CTkLabel,
-    skip_btn: ctk.CTkButton,
-) -> None:
-    try:
-        tmpdir = tempfile.mkdtemp()
-        dest = os.path.join(tmpdir, "GHGPredictorSetup.exe")
-        urllib.request.urlretrieve(url, dest)
-        subprocess.Popen([dest])
-        parent.after(0, parent.destroy)
-    except Exception as exc:
-        def _on_fail() -> None:
-            msg.configure(text=f"Download failed:\n{exc}")
-            skip_btn.configure(state="normal", text="Close")
-        parent.after(0, _on_fail)
+def _show_update_splash(parent: ctk.CTk, url: str) -> None:
+    """Frameless 'Updating...' splash while the installer downloads and runs silently."""
+    from splash import _build_frames, _assets_dir
+
+    splash = ctk.CTkToplevel(parent)
+    splash.overrideredirect(True)
+    splash.attributes("-topmost", True)
+
+    w, h = 340, 420
+    sw = splash.winfo_screenwidth()
+    sh = splash.winfo_screenheight()
+    splash.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 2}")
+
+    _theme_fg = ctk.ThemeManager.theme["CTk"]["fg_color"]
+    if isinstance(_theme_fg, (list, tuple)):
+        _canvas_bg = _theme_fg[1] if ctk.get_appearance_mode().lower() == "dark" else _theme_fg[0]
+    else:
+        _canvas_bg = _theme_fg
+
+    icon_size = 180
+    canvas = tk.Canvas(
+        splash, width=icon_size, height=icon_size,
+        bg=_canvas_bg, highlightthickness=0,
+    )
+    canvas.pack(pady=(60, 16))
+    canvas_item = canvas.create_image(icon_size // 2, icon_size // 2, anchor="center")
+
+    ctk.CTkLabel(
+        splash, text="GHG Predictor",
+        font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold"),
+        text_color="#e4f0ec",
+    ).pack(pady=(0, 6))
+    ctk.CTkLabel(
+        splash, text="Updating...",
+        font=ctk.CTkFont(family="Segoe UI", size=12),
+        text_color="#7aada0",
+    ).pack(pady=(0, 24))
+
+    progress = ctk.CTkProgressBar(
+        splash, width=240, height=3, corner_radius=2,
+        progress_color="#3ecf8e", fg_color="#2b3c37",
+        mode="indeterminate",
+    )
+    progress.pack()
+    progress.start()
+
+    pil_frames: list = []
+    tk_frames: list = []
+    frames_ready = [False]
+    frame_idx = [0]
+    alive = [True]
+
+    def _render() -> None:
+        try:
+            frames = _build_frames(str(_assets_dir() / "icon_vector.svg"), 48, icon_size)
+            pil_frames.extend(frames)
+        except Exception:
+            pass
+        frames_ready[0] = True
+
+    def _animate() -> None:
+        if frames_ready[0] and not tk_frames and pil_frames:
+            tk_frames.extend([ImageTk.PhotoImage(img) for img in pil_frames])
+        if tk_frames:
+            canvas.itemconfig(canvas_item, image=tk_frames[frame_idx[0] % len(tk_frames)])
+            frame_idx[0] += 1
+        if alive[0]:
+            splash.after(1000 // 30, _animate)
+
+    threading.Thread(target=_render, daemon=True).start()
+    _animate()
+
+    def _download_worker() -> None:
+        try:
+            tmpdir = tempfile.mkdtemp()
+            dest = os.path.join(tmpdir, "GHGPredictorSetup.exe")
+            urllib.request.urlretrieve(url, dest)
+            # /VERYSILENT + /SUPPRESSMSGBOXES: no wizard pages, no prompts
+            # /NORESTART: never auto-reboot after install
+            subprocess.Popen([dest, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"])
+            alive[0] = False
+            parent.after(0, parent.destroy)
+        except Exception as exc:
+            alive[0] = False
+
+            def _on_fail() -> None:
+                splash.destroy()
+                _show_error(parent, str(exc))
+
+            parent.after(0, _on_fail)
+
+    threading.Thread(target=_download_worker, daemon=True).start()
+
+
+def _show_error(parent: ctk.CTk, message: str) -> None:
+    dialog = ctk.CTkToplevel(parent)
+    dialog.title("Update Failed")
+    dialog.resizable(False, False)
+    dialog.transient(parent)
+    dialog.grab_set()
+
+    w, h = 360, 150
+    px = parent.winfo_x() + (parent.winfo_width() - w) // 2
+    py = parent.winfo_y() + (parent.winfo_height() - h) // 2
+    dialog.geometry(f"{w}x{h}+{px}+{py}")
+
+    ctk.CTkLabel(
+        dialog,
+        text=f"Download failed:\n{message}",
+        font=ctk.CTkFont(size=13),
+        justify="center",
+        wraplength=320,
+    ).pack(pady=(24, 16))
+
+    ctk.CTkButton(dialog, text="Close", width=100, command=dialog.destroy).pack()
