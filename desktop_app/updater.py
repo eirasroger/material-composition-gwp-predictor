@@ -204,9 +204,8 @@ def _show_update_splash(parent: ctk.CTk, url: str) -> None:
 
             _spawn_installer_and_restart(dest)
             alive[0] = False
-            import time
-            time.sleep(3)
-            parent.after(0, parent.destroy)
+            parent.after(0, parent.withdraw)
+            parent.after(60000, parent.destroy)
         except Exception as exc:
             alive[0] = False
 

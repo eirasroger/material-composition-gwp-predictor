@@ -28,7 +28,7 @@ class PredictionPanel(ctk.CTkFrame):
         # ── header label ──────────────────────────────────────────────────────
         ctk.CTkLabel(
             self,
-            text="Predicted GHG Emission",
+            text="Predicted greenhouse gas emissions",
             font=font(12),
             text_color=TEXT_SEC,
         ).pack(anchor="w", padx=24, pady=(28, 0))
