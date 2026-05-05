@@ -37,7 +37,7 @@ class MainWindow(ctk.CTk):
         super().__init__()
         self.adapter = adapter
 
-        self.title("GHG Predictor (version {__version__})")
+        self.title(f"GHG Predictor (version {__version__})")
         self.geometry("1200x800")
         self.minsize(980, 700)
         self.configure(fg_color=BG)
