@@ -18,6 +18,7 @@ from desktop_app.ui.eol_panel import EolPanel
 from desktop_app.ui.materials_panel import MaterialsPanel
 from desktop_app.ui.origin_panel import OriginPanel
 from desktop_app.ui.prediction_panel import PredictionPanel
+from desktop_app._version import __version__
 from desktop_app.ui.theme import ACCENT, BG, BORDER, SURFACE, font
 from src.utils import normalise_shares_to_100
 
@@ -36,7 +37,7 @@ class MainWindow(ctk.CTk):
         super().__init__()
         self.adapter = adapter
 
-        self.title("GHG Predictor")
+        self.title("GHG Predictor (version {__version__})")
         self.geometry("1200x800")
         self.minsize(980, 700)
         self.configure(fg_color=BG)

@@ -29,6 +29,7 @@ _REQUEST_TIMEOUT = 8
 # Inno Setup installs per-user under {localappdata}\GHGPredictor (see installer.iss).
 _INSTALL_DIR = os.path.join(os.environ.get("LOCALAPPDATA", ""), "GHGPredictor")
 _INSTALLED_EXE = os.path.join(_INSTALL_DIR, "GHGPredictor.exe")
+_STATE_FILE = os.path.join(_INSTALL_DIR, "update_state.json")
 
 
 def check_for_updates(parent: ctk.CTk, current_version: str) -> None:
@@ -37,6 +38,47 @@ def check_for_updates(parent: ctk.CTk, current_version: str) -> None:
         args=(parent, current_version),
         daemon=True,
     ).start()
+
+
+def reconcile_pending_update(current_version: str) -> None:
+    """
+    On startup, decide whether the previous in-app update attempt actually
+    landed. If a previous attempt set ``pending_target`` and the running
+    ``__version__`` matches, the silent install worked → clear state. If it
+    doesn't match, the silent install failed (PowerShell exited without
+    replacing the exe, or the user relaunched a stale shortcut) → bump
+    ``silent_failures`` so the next attempt falls back to the interactive
+    wizard. Safe to call before ``check_for_updates``.
+    """
+    state = _load_state()
+    target = state.get("pending_target")
+    if not target:
+        return
+    if _parse_version(target) == _parse_version(current_version):
+        _save_state({"pending_target": None, "silent_failures": 0})
+    else:
+        failures = int(state.get("silent_failures", 0)) + 1
+        _save_state({"pending_target": None, "silent_failures": failures})
+
+
+def _load_state() -> dict:
+    try:
+        with open(_STATE_FILE, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+            if isinstance(data, dict):
+                return data
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        pass
+    return {"pending_target": None, "silent_failures": 0}
+
+
+def _save_state(state: dict) -> None:
+    try:
+        os.makedirs(_INSTALL_DIR, exist_ok=True)
+        with open(_STATE_FILE, "w", encoding="utf-8") as fh:
+            json.dump(state, fh)
+    except OSError:
+        pass
 
 
 # ── internals ─────────────────────────────────────────────────────────────────
@@ -112,12 +154,15 @@ def _show_dialog(parent: ctk.CTk, version: str, url: str) -> None:
     def _on_update() -> None:
         dialog.grab_release()
         dialog.destroy()
-        _show_update_splash(parent, url)
+        interactive = int(_load_state().get("silent_failures", 0)) >= 1
+        _show_update_splash(parent, url, version, interactive)
 
     update_btn.configure(command=_on_update)
 
 
-def _show_update_splash(parent: ctk.CTk, url: str) -> None:
+def _show_update_splash(
+    parent: ctk.CTk, url: str, version: str, interactive: bool,
+) -> None:
     """Frameless 'Updating...' splash while the installer downloads and runs silently."""
     splash = ctk.CTkToplevel(parent)
     splash.overrideredirect(True)
@@ -202,7 +247,7 @@ def _show_update_splash(parent: ctk.CTk, url: str) -> None:
 
             parent.after(0, _set_installing)
 
-            _spawn_installer_and_restart(dest)
+            _spawn_installer_and_restart(dest, version, interactive)
             alive[0] = False
             parent.after(0, parent.withdraw)
             parent.after(60000, parent.destroy)
@@ -231,6 +276,9 @@ $installedExe= {installed_exe}
 $installDir  = {install_dir}
 $logFile     = {log_file}
 $installerLog= {installer_log}
+$installerArgs = {install_args}
+$restartApp = ${restart_app}
+$killBeforeInstall = ${kill_before_install}
 
 # Ensure log dir exists.
 $logDir = Split-Path $logFile -Parent
@@ -240,7 +288,7 @@ function Log($msg) {{
     "[{{0}}] {{1}}" -f (Get-Date -Format 'o'), $msg | Out-File -FilePath $logFile -Encoding utf8 -Append
 }}
 
-Log "updater starting (parent pid=$parentPid)"
+Log "updater starting (parent pid=$parentPid, args=$($installerArgs -join ' '))"
 
 # 1. Wait for the running app to exit so its files are no longer in use.
 try {{
@@ -253,62 +301,84 @@ try {{
     }}
 }} catch {{ Log "Wait-Process error: $_" }}
 
-# 2. Force-kill any lingering GHGPredictor.exe instances. The PyInstaller bundle
-#    holds DLLs in _internal\ that the silent installer cannot overwrite while
-#    open; with /SUPPRESSMSGBOXES, the 'files in use' prompt defaults to Cancel
-#    which silently aborts the install. Killing first prevents that.
-try {{
-    Get-Process -Name 'GHGPredictor' -ErrorAction SilentlyContinue |
-        ForEach-Object {{ Log "killing leftover pid=$($_.Id)"; $_ | Stop-Process -Force -ErrorAction SilentlyContinue }}
-}} catch {{ Log "Stop-Process error: $_" }}
+# 2. Silent path force-kills lingering GHGPredictor.exe instances. With
+#    /SUPPRESSMSGBOXES the 'files in use' prompt defaults to Cancel and
+#    silently aborts; killing first prevents that. Interactive path leaves
+#    the prompt visible so the user decides.
+if ($killBeforeInstall) {{
+    try {{
+        Get-Process -Name 'GHGPredictor' -ErrorAction SilentlyContinue |
+            ForEach-Object {{ Log "killing leftover pid=$($_.Id)"; $_ | Stop-Process -Force -ErrorAction SilentlyContinue }}
+    }} catch {{ Log "Stop-Process error: $_" }}
+    Start-Sleep -Seconds 2
+}}
 
-# 3. Brief pause so Windows finishes releasing file handles.
-Start-Sleep -Seconds 2
-
-# 4. Run the installer fully silently. /TASKS=desktopicon force-checks the
-#    desktop-shortcut task which is otherwise unchecked-by-default and would be
-#    skipped by /VERYSILENT.
+# 3. Run the installer.
 Log "launching installer: $installer"
 try {{
-    $p = Start-Process -FilePath $installer `
-        -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/TASKS=desktopicon',"/LOG=$installerLog" `
-        -Wait -PassThru
+    $p = Start-Process -FilePath $installer -ArgumentList $installerArgs -Wait -PassThru
     Log "installer exit code: $($p.ExitCode)"
 }} catch {{
     Log "installer launch failed: $_"
 }}
 
-# 5. Restart the freshly installed app.
-if (Test-Path $installedExe) {{
-    Log "starting $installedExe"
-    try {{ Start-Process -FilePath $installedExe }} catch {{ Log "restart failed: $_" }}
+# 4. Restart only in silent mode. The interactive wizard offers its own
+#    'Launch GHG Predictor' checkbox on the Finish page, so auto-restarting
+#    here would risk a duplicate instance.
+if ($restartApp) {{
+    if (Test-Path $installedExe) {{
+        Log "starting $installedExe"
+        try {{ Start-Process -FilePath $installedExe }} catch {{ Log "restart failed: $_" }}
+    }} else {{
+        Log "installed exe not found at $installedExe"
+    }}
 }} else {{
-    Log "installed exe not found at $installedExe"
+    Log "skipping restart (interactive install - wizard handles launch)"
 }}
 
-# 6. Self-delete this script.
+# 5. Self-delete this script.
 try {{ Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue }} catch {{ }}
 """.lstrip()
 
 
-def _spawn_installer_and_restart(installer_path: str) -> None:
+def _spawn_installer_and_restart(
+    installer_path: str, target_version: str, interactive: bool,
+) -> None:
     """
-    Launch a detached helper that:
-      1. Waits for the current process (this app) to exit so files are unlocked.
-      2. Force-kills any lingering GHGPredictor.exe before the installer runs so
-         /SUPPRESSMSGBOXES never hits a 'files in use' prompt (which defaults to
-         Cancel and silently aborts the install).
-      3. Runs the Inno Setup installer silently with /TASKS=desktopicon so the
-         desktop shortcut is created without user input.
-      4. Launches the freshly installed exe.
+    Launch a detached PowerShell helper that waits for us to exit, runs the
+    Inno Setup installer, and (silent path only) relaunches the new exe.
 
-    Writes the helper to a temp .ps1 file and runs it as a fully detached
-    process so it survives our shutdown. Logs to %LOCALAPPDATA%\\GHGPredictor\\
-    update.log to make future failures debuggable.
+    ``interactive=False`` (default path) runs /VERYSILENT /SUPPRESSMSGBOXES
+    /TASKS=desktopicon and force-kills lingering GHGPredictor.exe processes
+    first so the silent installer never hits a 'files in use' prompt that
+    /SUPPRESSMSGBOXES would silently Cancel.
+
+    ``interactive=True`` (hail-mary fallback) runs the installer with no
+    silencing flags so the user sees the standard wizard. ``reconcile_pending_update``
+    flips the failure counter that triggers this path.
+
+    Before spawning we record ``target_version`` in update_state.json so the
+    next launch can tell whether the install actually replaced the running exe.
     """
+    state = _load_state()
+    state["pending_target"] = target_version
+    _save_state(state)
+
     my_pid = os.getpid()
     log_file = os.path.join(_INSTALL_DIR, "update.log")
     installer_log = os.path.join(_INSTALL_DIR, "installer.log")
+
+    if interactive:
+        install_args = "@('/NORESTART',\"/LOG=$installerLog\")"
+        restart_app = "false"
+        kill_before_install = "false"
+    else:
+        install_args = (
+            "@('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"
+            "'/TASKS=desktopicon',\"/LOG=$installerLog\")"
+        )
+        restart_app = "true"
+        kill_before_install = "true"
 
     script = _UPDATE_PS1_TEMPLATE.format(
         pid=my_pid,
@@ -317,6 +387,9 @@ def _spawn_installer_and_restart(installer_path: str) -> None:
         install_dir=_ps_quote(_INSTALL_DIR),
         log_file=_ps_quote(log_file),
         installer_log=_ps_quote(installer_log),
+        install_args=install_args,
+        restart_app=restart_app,
+        kill_before_install=kill_before_install,
     )
 
     script_dir = tempfile.mkdtemp(prefix="ghg_update_")
@@ -324,15 +397,19 @@ def _spawn_installer_and_restart(installer_path: str) -> None:
     with open(script_path, "w", encoding="utf-8") as fh:
         fh.write(script)
 
-    DETACHED_PROCESS = 0x00000008
     CREATE_NEW_PROCESS_GROUP = 0x00000200
     CREATE_NO_WINDOW = 0x08000000
 
-    # stdin/stdout/stderr must be explicit DEVNULL: the frozen app is built with
-    # console=False, so the parent has no std handles. Without these, Popen
-    # inherits "nothing" and powershell.exe exits immediately on launch — the
-    # script never runs and no log is ever written. (PyInstaller --noconsole
-    # gotcha.)
+    # DO NOT add DETACHED_PROCESS here. With DETACHED_PROCESS, powershell.exe
+    # launches with no console at all and exits immediately (code 0) without
+    # ever executing the -File body — verified empirically. CREATE_NO_WINDOW
+    # gives it a hidden console which is what -File needs;
+    # CREATE_NEW_PROCESS_GROUP detaches it from our group so it survives our
+    # shutdown.
+    #
+    # stdin/stdout/stderr=DEVNULL: the frozen app is --noconsole, so the
+    # parent has no std handles. Explicit DEVNULL gives the child something
+    # concrete to inherit instead of nothing.
     subprocess.Popen(
         [
             "powershell.exe",
@@ -344,7 +421,7 @@ def _spawn_installer_and_restart(installer_path: str) -> None:
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
+        creationflags=CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
         close_fds=True,
     )
 
