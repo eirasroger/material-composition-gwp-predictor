@@ -103,6 +103,8 @@ A standalone Windows desktop app wraps the trained model in a clickable GUI: pic
 - **Users**: download `GHGPredictorSetup-<version>.exe` from the [Releases page](https://github.com/eirasroger/material-composition-gwp-predictor/releases), run it (no admin rights, no Python needed), launch from Start Menu.
 - **Developers**: see [`desktop_app/README.md`](desktop_app/README.md) for build steps. The app lives entirely under `desktop_app/` and reuses the same training/inference code from `src/`.
 
+The application automatically checks for updates on startup and prompts users to install any available new versions.
+
 ## Contact
 
-Roger Vergés - Corresponding author and lead developer - [roger.verges.eiras@upc.edu](mailto:roger.verges.eiras@upc.edu)<a href="https://orcid.org/0009-0001-5887-4785" aria-label="ORCID"><img src="https://orcid.org/sites/default/files/images/orcid_16x16.png" alt="ORCID iD" width="16" height="16" style="vertical-align: text-bottom; margin-left: 4px;"></a>
+Roger Vergés - Lead developer - [roger.verges.eiras@upc.edu](mailto:roger.verges.eiras@upc.edu)<a href="https://orcid.org/0009-0001-5887-4785" aria-label="ORCID"><img src="https://orcid.org/sites/default/files/images/orcid_16x16.png" alt="ORCID iD" width="16" height="16" style="vertical-align: text-bottom; margin-left: 4px;"></a>
