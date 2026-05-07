@@ -213,10 +213,12 @@ wiki-news-300d-1M/
 GoogleNews-vectors-negative300/
 figures/
 .claude/
+docs/
 
 # Files
 dataset.json
 diagnostics_ghg.json
+CLAUDE.md
 
 # Generated at build time by build.ps1 — never commit the real version string.
 desktop_app/_version.py
