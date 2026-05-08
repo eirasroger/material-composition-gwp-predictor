@@ -18,7 +18,7 @@ class CategoryPanel(ctk.CTkFrame):
         on_change: Optional[Callable[[Optional[str]], None]] = None,
     ) -> None:
         super().__init__(master, fg_color=SURFACE, corner_radius=8)
-        self._categories = sorted(categories, key=str.lower)
+        self._categories = list(categories)
         self._on_change = on_change
 
         ctk.CTkLabel(

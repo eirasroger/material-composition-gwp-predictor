@@ -34,9 +34,13 @@ class SearchableDropdown(ctk.CTkFrame):
         height: int = 32,
         max_results: int = 40,
         placeholder: str = "",
+        sort: bool = True,
     ) -> None:
         super().__init__(master, fg_color="transparent")
-        self._all_values: List[str] = sorted(set(values), key=lambda s: s.lower())
+        self._all_values: List[str] = (
+            sorted(set(values), key=lambda s: s.lower()) if sort
+            else list(dict.fromkeys(values))
+        )
         self._command = command
         self._max_results = max_results
 
@@ -62,8 +66,11 @@ class SearchableDropdown(ctk.CTkFrame):
         self.entry.delete(0, "end")
         self.entry.insert(0, value)
 
-    def set_values(self, values: Iterable[str]) -> None:
-        self._all_values = sorted(set(values), key=lambda s: s.lower())
+    def set_values(self, values: Iterable[str], sort: bool = True) -> None:
+        self._all_values = (
+            sorted(set(values), key=lambda s: s.lower()) if sort
+            else list(dict.fromkeys(values))
+        )
         if self._popup is not None:
             self._refresh_items()
 

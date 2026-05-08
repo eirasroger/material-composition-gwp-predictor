@@ -90,8 +90,21 @@ class InferenceAdapter:
         with open(materials_path, "r", encoding="utf-8") as f:
             self.materials: List[str] = json.load(f)
 
+        cat_materials_path = self.assets_dir / "category_materials.json"
+        if cat_materials_path.exists():
+            with open(cat_materials_path, "r", encoding="utf-8") as f:
+                raw: Dict[str, List[str]] = json.load(f)
+            valid_cats = set(self.loaded.cat_index.keys())
+            self.category_materials: Dict[str, List[str]] = {
+                k: v for k, v in raw.items() if k in valid_cats
+            }
+        else:
+            self.category_materials: Dict[str, List[str]] = {}
+
     @property
     def categories(self) -> List[str]:
+        if self.category_materials:
+            return list(self.category_materials.keys())
         return sorted(self.loaded.cat_index.keys())
 
     def predict(

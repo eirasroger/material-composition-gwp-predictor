@@ -1,9 +1,10 @@
 """
 Bake the assets shipped in the desktop installer:
 
-- ``vocab.npz``       embedding subset (only tokens needed by training-set materials)
-- ``materials.json``  sorted list of material display strings for the UI dropdown
-- ``ghg_model.pt``    copy of the trained checkpoint
+- ``vocab.npz``               embedding subset (only tokens needed by training-set materials)
+- ``materials.json``          material display strings sorted by global frequency
+- ``category_materials.json`` per-category material lists sorted by frequency within each category
+- ``ghg_model.pt``            copy of the trained checkpoint
 
 Run from anywhere::
 
@@ -20,6 +21,7 @@ import argparse
 import json
 import shutil
 import sys
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import torch
@@ -46,21 +48,33 @@ def bake(model_path: Path, dataset_path: Path, out_dir: Path) -> None:
     valid = filter_valid_products(products, cat_index)
     print(f"Valid products for asset baking: {len(valid)}")
 
-    mat_strings = set()
+    cat_counts: Counter = Counter()
+    cat_mat_counts: defaultdict = defaultdict(Counter)
+    global_mat_counts: Counter = Counter()
     for p in valid:
+        cat = p["category"]
+        cat_counts[cat] += 1
         for m in p["materials"]:
             name = m["name"].strip()
             if name:
-                mat_strings.add(name)
-    materials_list = sorted(mat_strings, key=lambda s: s.lower())
+                cat_mat_counts[cat][name] += 1
+                global_mat_counts[name] += 1
+
+    sorted_cats = sorted(cat_counts, key=lambda c: -cat_counts[c])
+    category_materials = {
+        cat: sorted(cat_mat_counts[cat], key=lambda m: -cat_mat_counts[cat][m])
+        for cat in sorted_cats
+    }
+    materials_list = sorted(global_mat_counts, key=lambda m: -global_mat_counts[m])
     print(f"Unique material strings: {len(materials_list)}")
 
     vocab = get_vocab(valid)
     print(f"Vocab tokens loaded: {len(vocab)}")
 
-    vocab_path     = out_dir / "vocab.npz"
-    materials_path = out_dir / "materials.json"
-    model_dest     = out_dir / "ghg_model.pt"
+    vocab_path              = out_dir / "vocab.npz"
+    materials_path          = out_dir / "materials.json"
+    category_materials_path = out_dir / "category_materials.json"
+    model_dest              = out_dir / "ghg_model.pt"
 
     save_vocab_npz(vocab, vocab_path)
     print(f"Saved {vocab_path} ({vocab_path.stat().st_size / 1024:.1f} KB)")
@@ -68,6 +82,10 @@ def bake(model_path: Path, dataset_path: Path, out_dir: Path) -> None:
     with open(materials_path, "w", encoding="utf-8") as f:
         json.dump(materials_list, f, ensure_ascii=False, indent=2)
     print(f"Saved {materials_path}")
+
+    with open(category_materials_path, "w", encoding="utf-8") as f:
+        json.dump(category_materials, f, ensure_ascii=False, indent=2)
+    print(f"Saved {category_materials_path} ({len(category_materials)} categories)")
 
     if model_path.resolve() != model_dest.resolve():
         shutil.copyfile(model_path, model_dest)

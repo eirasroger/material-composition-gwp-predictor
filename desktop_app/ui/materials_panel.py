@@ -26,15 +26,16 @@ class _MaterialRow(ctk.CTkFrame):
         material_choices: List[str],
         on_change: Callable[[], None],
         on_remove: Callable[["_MaterialRow"], None],
+        valid_names: Optional[set] = None,
     ) -> None:
         super().__init__(master, fg_color="transparent")
         self._on_change = on_change
         self._on_remove = on_remove
-        self._material_choices = material_choices
+        self._valid_names: set = valid_names if valid_names is not None else set(material_choices)
 
         self.dropdown = SearchableDropdown(
             self, values=material_choices, command=lambda _v: self._on_change(),
-            placeholder="Type to search material ...", width=260,
+            placeholder="Type to search material ...", width=260, sort=False,
         )
         self.dropdown.pack(side="left", fill="x", expand=True, padx=(0, 8))
 
@@ -58,7 +59,7 @@ class _MaterialRow(ctk.CTkFrame):
         return self.dropdown.get()
 
     def is_valid_name(self) -> bool:
-        return self.name() in self._material_choices
+        return self.name() in self._valid_names
 
     def percentage(self) -> float:
         return self.slider.get()
@@ -73,9 +74,13 @@ class MaterialsPanel(ctk.CTkFrame):
         master,
         material_choices: List[str],
         on_change: Optional[Callable[[List[Dict[str, float]]], None]] = None,
+        category_materials: Optional[Dict[str, List[str]]] = None,
     ) -> None:
         super().__init__(master, fg_color=SURFACE, corner_radius=8)
-        self._material_choices = sorted(material_choices, key=str.lower)
+        self._all_materials: List[str] = list(dict.fromkeys(material_choices))
+        self._mat_set: set = set(self._all_materials)
+        self._category_materials: Dict[str, List[str]] = category_materials or {}
+        self._current_ordered: List[str] = self._all_materials
         self._on_change = on_change
         self._rows: List[_MaterialRow] = []
 
@@ -129,12 +134,26 @@ class MaterialsPanel(ctk.CTkFrame):
     def total(self) -> float:
         return sum(r.percentage() for r in self._rows)
 
+    def set_category(self, category: Optional[str]) -> None:
+        self._current_ordered = self._ordered_for_category(category)
+        for row in self._rows:
+            row.dropdown.set_values(self._current_ordered, sort=False)
+
+    def _ordered_for_category(self, category: Optional[str]) -> List[str]:
+        if not self._category_materials or not category or category not in self._category_materials:
+            return self._all_materials
+        top = [m for m in self._category_materials[category] if m in self._mat_set]
+        top_set = set(top)
+        rest = sorted((m for m in self._all_materials if m not in top_set), key=str.lower)
+        return top + rest
+
     def _add_row(self) -> None:
         row = _MaterialRow(
             self._rows_holder,
-            material_choices=self._material_choices,
+            material_choices=self._current_ordered,
             on_change=self._handle_change,
             on_remove=self._remove_row,
+            valid_names=self._mat_set,
         )
         row.pack(fill="x", pady=2)
         self._rows.append(row)

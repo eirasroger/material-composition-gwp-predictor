@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import customtkinter as ctk
 
@@ -69,13 +69,14 @@ class MainWindow(ctk.CTk):
 
         self.category_panel = CategoryPanel(
             left, categories=self.adapter.categories,
-            on_change=lambda _v: self._schedule_predict(),
+            on_change=self._on_category_change,
         )
         self.category_panel.pack(fill="x", pady=(6, 8))
 
         self.materials_panel = MaterialsPanel(
             left, material_choices=self.adapter.materials,
             on_change=lambda _m: self._schedule_predict(),
+            category_materials=self.adapter.category_materials,
         )
         self.materials_panel.pack(fill="x", pady=(0, 8))
 
@@ -98,6 +99,11 @@ class MainWindow(ctk.CTk):
         self.prediction_panel = PredictionPanel(right)
         self.prediction_panel.grid(row=0, column=0, sticky="nsew")
 
+        self._schedule_predict()
+
+    # ── category / material wiring ────────────────────────────────────────────
+    def _on_category_change(self, category: Optional[str]) -> None:
+        self.materials_panel.set_category(category)
         self._schedule_predict()
 
     # ── prediction wiring ─────────────────────────────────────────────────────
