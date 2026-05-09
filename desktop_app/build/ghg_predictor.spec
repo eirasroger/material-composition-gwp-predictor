@@ -29,12 +29,13 @@ fitz_datas, fitz_binaries, fitz_hidden = collect_all("fitz")
 # inference_adapter._default_assets_dir() and splash._assets_dir() find them
 # via sys._MEIPASS / assets.
 asset_files = [
-    (str(APP_DIR / "assets" / "ghg_model.pt"),       "assets"),
-    (str(APP_DIR / "assets" / "vocab.npz"),           "assets"),
-    (str(APP_DIR / "assets" / "materials.json"),      "assets"),
-    (str(APP_DIR / "assets" / "icon.ico"),            "assets"),
-    (str(APP_DIR / "assets" / "icon_vector.svg"),     "assets"),
-    (str(APP_DIR / "assets" / "theme_dark.json"),     "assets"),
+    (str(APP_DIR / "assets" / "ghg_model.pt"),              "assets"),
+    (str(APP_DIR / "assets" / "vocab.npz"),                  "assets"),
+    (str(APP_DIR / "assets" / "materials.json"),             "assets"),
+    (str(APP_DIR / "assets" / "category_materials.json"),    "assets"),
+    (str(APP_DIR / "assets" / "icon.ico"),                   "assets"),
+    (str(APP_DIR / "assets" / "icon_vector.svg"),            "assets"),
+    (str(APP_DIR / "assets" / "theme_dark.json"),            "assets"),
 ]
 
 a = Analysis(
