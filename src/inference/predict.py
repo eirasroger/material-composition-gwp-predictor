@@ -9,9 +9,9 @@ Use ``load_model`` + ``predict_ghg_with_loaded`` for interactive applications wh
 a fresh ``torch.load`` per prediction would be unacceptable.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Union
+from typing import Dict, Optional, Union
 
 import numpy as np
 import torch
@@ -29,6 +29,7 @@ class LoadedModel:
     y_scale: float
     cat_index: Dict[str, int]
     input_dim: int
+    category_error_bounds: Optional[Dict[str, Dict]] = field(default=None)
 
 
 def load_model(checkpoint: Union[str, Path] = MODEL_PATH) -> LoadedModel:
@@ -48,6 +49,7 @@ def load_model(checkpoint: Union[str, Path] = MODEL_PATH) -> LoadedModel:
         y_scale=float(ckpt["y_scale"]),
         cat_index=ckpt["cat_index"],
         input_dim=int(ckpt["input_dim"]),
+        category_error_bounds=ckpt.get("category_error_bounds"),
     )
 
 
@@ -73,7 +75,7 @@ def predict_ghg_with_loaded(
         normalized["hazardous_pct"],
         normalized["inert_pct"],
         normalized["incineration_pct"],
-    ], dtype=np.float32)
+    ], dtype=np.float32) / 100.0
 
     x = torch.tensor(
         np.concatenate([mat_emb, cat_emb, circ_feats]), dtype=torch.float32

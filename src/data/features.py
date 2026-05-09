@@ -24,7 +24,7 @@ def build_features(
             item["hazardous_pct"],
             item["inert_pct"],
             item["incineration_pct"],
-        ], dtype=np.float32)
+        ], dtype=np.float32) / 100.0
 
         X.append(np.concatenate([mat_emb, cat_emb, circ_feats]))
         y.append(item["ghg"])

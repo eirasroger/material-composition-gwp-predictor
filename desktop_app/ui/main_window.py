@@ -161,7 +161,8 @@ class MainWindow(ctk.CTk):
             self.prediction_panel.set_status(f"Prediction failed: {exc}")
             return
 
-        self.prediction_panel.set_prediction(value)
+        bounds = self.adapter.prediction_range(value, category)
+        self.prediction_panel.set_prediction(value, bounds)
         self.prediction_panel.set_status("\n".join(status_lines))
 
     @staticmethod

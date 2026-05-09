@@ -66,6 +66,16 @@ class PredictionPanel(ctk.CTkFrame):
         widget.pack(fill="x")
         widget.configure(bg=SURFACE, highlightthickness=0)
 
+        # ── range label ───────────────────────────────────────────────────────
+        self._range_label = ctk.CTkLabel(
+            self,
+            text="",
+            text_color=TEXT_SEC,
+            font=font(11),
+            anchor="w",
+        )
+        self._range_label.pack(fill="x", padx=24, pady=(8, 0))
+
         # ── status ────────────────────────────────────────────────────────────
         self._status_label = ctk.CTkLabel(
             self,
@@ -76,16 +86,27 @@ class PredictionPanel(ctk.CTkFrame):
             justify="left",
             wraplength=420,
         )
-        self._status_label.pack(fill="x", padx=24, pady=(12, 24))
+        self._status_label.pack(fill="x", padx=24, pady=(4, 24))
 
         self._draw_gauge(None)
 
-    def set_prediction(self, value: float) -> None:
+    def set_prediction(
+        self,
+        value: float,
+        bounds: "tuple[float, float] | None" = None,
+    ) -> None:
         self._value_label.configure(text=f"{value:.3f} kg CO₂eq / kg")
-        self._draw_gauge(float(value))
+        if bounds is not None:
+            self._range_label.configure(
+                text=f"Plausible range: {bounds[0]:.2f} – {bounds[1]:.2f} kg CO₂eq / kg"
+            )
+        else:
+            self._range_label.configure(text="")
+        self._draw_gauge(float(value), bounds)
 
     def clear_prediction(self) -> None:
         self._value_label.configure(text="— kg CO₂eq / kg")
+        self._range_label.configure(text="")
         self._draw_gauge(None)
 
     def set_status(self, text: str) -> None:
@@ -106,7 +127,7 @@ class PredictionPanel(ctk.CTkFrame):
         self._ax.spines["bottom"].set_color(BORDER)
         self._fig.subplots_adjust(left=0.04, right=0.98, top=0.82, bottom=0.42)
 
-    def _draw_gauge(self, value) -> None:
+    def _draw_gauge(self, value, bounds=None) -> None:
         self._ax.clear()
         self._configure_axes()
         # Background track
@@ -116,13 +137,22 @@ class PredictionPanel(ctk.CTkFrame):
         )
         if value is not None:
             clamped = max(GHG_MIN, min(GHG_MAX, value))
+            # Plausible range band (wider, behind the fill)
+            if bounds is not None:
+                r_low  = max(GHG_MIN, bounds[0])
+                r_high = min(GHG_MAX, bounds[1])
+                self._ax.barh(
+                    [0.5], [r_high - r_low], left=r_low, height=0.52,
+                    color=ACCENT + "28", edgecolor=ACCENT + "70", linewidth=0.8,
+                    zorder=1,
+                )
             # Filled portion of track
             self._ax.barh(
                 [0.5], [clamped - GHG_MIN], left=GHG_MIN, height=0.28,
-                color=ACCENT + "55", edgecolor="none",
+                color=ACCENT + "55", edgecolor="none", zorder=2,
             )
             # Needle line + dot
-            self._ax.axvline(clamped, color=ACCENT, linewidth=2, alpha=0.9)
+            self._ax.axvline(clamped, color=ACCENT, linewidth=2, alpha=0.9, zorder=3)
             self._ax.plot(
                 [clamped], [0.5], marker="o", color=ACCENT,
                 markersize=9, zorder=4, markeredgecolor=SURFACE, markeredgewidth=1.5,

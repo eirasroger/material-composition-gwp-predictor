@@ -9,12 +9,12 @@ import torch
 import torch.nn as nn
 from sklearn.metrics import mean_absolute_error
 
-from src.config import EPOCHS, LR, PATIENCE
+from src.config import EPOCHS, LR, PATIENCE, WEIGHT_DECAY
 from src.utils import r2_safe
 
 
 def train_model(model, train_loader, val_loader, device, scaler_y_mean, scaler_y_scale):
-    opt     = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
+    opt     = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     sched   = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, patience=8, factor=0.5)
     loss_fn = nn.HuberLoss(delta=1.0)
 

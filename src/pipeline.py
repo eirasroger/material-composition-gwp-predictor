@@ -3,7 +3,7 @@ End-to-end pipeline orchestration: load -> filter -> embed -> split -> train ->
 evaluate -> save artefacts -> demo inference.
 """
 
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -26,8 +26,8 @@ from src.config import (
     MODEL_PATH,
     N_CIRC_FEATURES,
     PRED_SCATTER_PATH,
-    RANDOM_SEED,
     RESIDUALS_PATH,
+    SEEDS,
     TRAINING_PLOT_PATH,
 )
 from src.data.features import build_features
@@ -105,23 +105,12 @@ def run():
     if not np.isfinite(sy).all():
         raise ValueError("Target scaling produced non-finite values. Check the dataset.")
 
-    idx = np.arange(len(y))
-    idx_tr, idx_tmp = train_test_split(
-        idx, test_size=0.30, random_state=RANDOM_SEED,
-        stratify=[categories_all[i] for i in idx],
-    )
-    idx_val, idx_te = train_test_split(
-        idx_tmp, test_size=0.50, random_state=RANDOM_SEED,
-        stratify=[categories_all[i] for i in idx_tmp],
-    )
+    scaler_y_mean  = float(scaler_y.mean_[0])
+    scaler_y_scale = float(scaler_y.scale_[0])
 
-    print(f"\nStratified split  ->  train: {len(idx_tr)}  val: {len(idx_val)}  test: {len(idx_te)}")
-
-    for split_name, split_idx in [("train", idx_tr), ("val", idx_val), ("test", idx_te)]:
-        cats_in_split = set(categories_all[i] for i in split_idx)
-        missing       = set(cat_index.keys()) - cats_in_split
-        status        = "all categories present" if not missing else f"MISSING: {missing}"
-        print(f"  {split_name:<6}: {status}")
+    dummy_model = GHGNet(input_dim=input_dim).to(device)
+    print(f"Parameters: {sum(p.numel() for p in dummy_model.parameters() if p.requires_grad):,}")
+    del dummy_model
 
     def make_loader(indices, shuffle=False):
         ds = GHGDataset(X[indices], sy[indices])
@@ -132,77 +121,160 @@ def run():
             drop_last=(shuffle and len(indices) > BATCH_SIZE),
         )
 
-    train_loader = make_loader(idx_tr, shuffle=True)
-    val_loader   = make_loader(idx_val)
-    test_loader  = make_loader(idx_te)
+    # ── Multi-seed training ───────────────────────────────────────────────────
+    seed_results          = []
+    best_val_mae          = float("inf")
+    best_checkpoint       = None
+    best_history          = None
+    best_seed             = None
+    best_test_res         = None
+    best_test_cats        = None
+    best_example_idx      = None
+    all_cat_signed_errors: dict = defaultdict(list)
 
+    for seed in SEEDS:
+        print(f"\n{'=' * 58}")
+        print(f"  SEED {seed}  ({SEEDS.index(seed) + 1}/{len(SEEDS)})")
+        print(f"{'=' * 58}")
+
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+
+        idx = np.arange(len(y))
+        idx_tr, idx_tmp = train_test_split(
+            idx, test_size=0.30, random_state=seed,
+            stratify=[categories_all[i] for i in idx],
+        )
+        idx_val, idx_te = train_test_split(
+            idx_tmp, test_size=0.50, random_state=seed,
+            stratify=[categories_all[i] for i in idx_tmp],
+        )
+        print(f"Split -> train: {len(idx_tr)}  val: {len(idx_val)}  test: {len(idx_te)}")
+
+        train_loader = make_loader(idx_tr, shuffle=True)
+        val_loader   = make_loader(idx_val)
+        test_loader  = make_loader(idx_te)
+
+        model = GHGNet(input_dim=input_dim).to(device)
+        model, history = train_model(
+            model, train_loader, val_loader, device, scaler_y_mean, scaler_y_scale
+        )
+
+        val_res  = evaluate_model(model, val_loader,  device, scaler_y_mean, scaler_y_scale)
+        test_res = evaluate_model(model, test_loader, device, scaler_y_mean, scaler_y_scale)
+
+        test_cats = [categories_all[i] for i in idx_te]
+        for pred, actual, cat in zip(test_res["preds"], test_res["actuals"], test_cats):
+            all_cat_signed_errors[cat].append(float(pred) - float(actual))
+
+        print(
+            f"\nSeed {seed}: val MAE={val_res['mae']:.4f}  "
+            f"test MAE={test_res['mae']:.4f}  test R²={test_res['r2_sample']:.4f}"
+        )
+
+        seed_results.append({
+            "seed":           seed,
+            "val_mae":        val_res["mae"],
+            "test_mae":       test_res["mae"],
+            "test_rmse":      test_res["rmse"],
+            "test_nrmse":     test_res["nrmse"],
+            "test_r2_range":  test_res["r2_range"],
+            "test_r2_sample": test_res["r2_sample"],
+            **{k: v for k, v in test_res.items() if k.startswith("within_")},
+        })
+
+        if val_res["mae"] < best_val_mae:
+            best_val_mae     = val_res["mae"]
+            best_checkpoint  = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+            best_history     = history
+            best_seed        = seed
+            best_test_res    = test_res
+            best_test_cats   = test_cats
+            best_example_idx = idx_te[0]
+
+    # ── Per-category error bounds (aggregated across all seeds) ──────────────
+    category_error_bounds = {}
+    for cat, errors in all_cat_signed_errors.items():
+        arr = np.array(errors, dtype=np.float32)
+        category_error_bounds[cat] = {
+            "p25": float(np.percentile(arr, 25)),
+            "p75": float(np.percentile(arr, 75)),
+            "n":   len(arr),
+        }
+
+    # ── Multi-seed summary ────────────────────────────────────────────────────
+    test_maes = [r["test_mae"]       for r in seed_results]
+    test_r2s  = [r["test_r2_sample"] for r in seed_results]
+
+    print(f"\n{'=' * 58}")
+    print(f"  MULTI-SEED SUMMARY  ({len(SEEDS)} seeds)")
+    print(f"{'=' * 58}")
+    for r in seed_results:
+        marker = "  <-- saved" if r["seed"] == best_seed else ""
+        print(
+            f"  seed {r['seed']}: val MAE={r['val_mae']:.4f}  "
+            f"test MAE={r['test_mae']:.4f}  R²={r['test_r2_sample']:.4f}{marker}"
+        )
+    print(f"  {'─' * 54}")
+    print(f"  Test MAE : {np.mean(test_maes):.4f} ± {np.std(test_maes):.4f}")
+    print(f"  Test R²  : {np.mean(test_r2s):.4f} ± {np.std(test_r2s):.4f}")
+    print(f"{'=' * 58}")
+
+    # ── Full reporting for best seed ──────────────────────────────────────────
     model = GHGNet(input_dim=input_dim).to(device)
-    print(f"Parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
+    model.load_state_dict(best_checkpoint)
 
-    scaler_y_mean  = float(scaler_y.mean_[0])
-    scaler_y_scale = float(scaler_y.scale_[0])
-
-    model, history = train_model(
-        model, train_loader, val_loader, device, scaler_y_mean, scaler_y_scale
-    )
-
-    test_results = evaluate_model(model, test_loader, device, scaler_y_mean, scaler_y_scale)
-
-    print("\n" + "=" * 50)
-    print("  TEST SET RESULTS")
+    print(f"\n{'=' * 50}")
+    print(f"  BEST MODEL (seed {best_seed}) — TEST SET RESULTS")
     print("=" * 50)
-    print(f"  MAE           {test_results['mae']:.4f} kg CO2-eq")
-    print(f"  RMSE          {test_results['rmse']:.4f} kg CO2-eq")
-    print(f"  NRMSE         {test_results['nrmse']:.4f}  (fraction of [{GHG_MIN}, {GHG_MAX}] range)")
-    print(f"  R2 (range)    {test_results['r2_range']:.6f}  (vs fixed scale)")
-    print(f"  R2 (sample)   {test_results['r2_sample']:.4f}  (vs sample variance, for reference)")
-    print(f"  Within +-0.5  {test_results['within_0.5kg']:.1f}%")
-    print(f"  Within +-1.0  {test_results['within_1.0kg']:.1f}%")
-    print(f"  Within +-2.0  {test_results['within_2.0kg']:.1f}%")
-    print(f"  Within +-5.0  {test_results['within_5.0kg']:.1f}%")
+    print(f"  MAE           {best_test_res['mae']:.4f} kg CO2-eq")
+    print(f"  RMSE          {best_test_res['rmse']:.4f} kg CO2-eq")
+    print(f"  NRMSE         {best_test_res['nrmse']:.4f}  (fraction of [{GHG_MIN}, {GHG_MAX}] range)")
+    print(f"  R2 (range)    {best_test_res['r2_range']:.6f}  (vs fixed scale)")
+    print(f"  R2 (sample)   {best_test_res['r2_sample']:.4f}  (vs sample variance, for reference)")
+    print(f"  Within +-0.5  {best_test_res['within_0.5kg']:.1f}%")
+    print(f"  Within +-1.0  {best_test_res['within_1.0kg']:.1f}%")
+    print(f"  Within +-2.0  {best_test_res['within_2.0kg']:.1f}%")
+    print(f"  Within +-5.0  {best_test_res['within_5.0kg']:.1f}%")
     print("=" * 50)
 
-    print("\n-- Sample predictions (first 5 of test set) --")
+    print("\n-- Sample predictions (first 5 of best-seed test set) --")
     print(f"  {'Actual':>10}  {'Predicted':>10}  {'Abs Err':>10}  Category")
-    test_categories = [categories_all[i] for i in idx_te]
     for a, p, c in zip(
-        test_results["actuals"][:5], test_results["preds"][:5], test_categories[:5]
+        best_test_res["actuals"][:5], best_test_res["preds"][:5], best_test_cats[:5]
     ):
         print(f"  {a:>10.4f}  {p:>10.4f}  {abs(a - p):>10.4f}  {c}")
 
     per_cat_metrics = print_category_metrics(
-        test_results["actuals"], test_results["preds"], test_categories
+        best_test_res["actuals"], best_test_res["preds"], best_test_cats
     )
-
     print_worst_predictions(
-        test_results["actuals"], test_results["preds"], test_categories, n=10
+        best_test_res["actuals"], best_test_res["preds"], best_test_cats, n=10
     )
 
-    save_plots(history, test_results["actuals"], test_results["preds"])
+    save_plots(best_history, best_test_res["actuals"], best_test_res["preds"])
     print(f"\nSaved plot -> {TRAINING_PLOT_PATH}")
     print(f"Saved plot -> {PRED_SCATTER_PATH}")
     print(f"Saved plot -> {RESIDUALS_PATH}")
 
     torch.save(
         {
-            "model_state": model.state_dict(),
-            "y_mean":      scaler_y_mean,
-            "y_scale":     scaler_y_scale,
-            "hidden_dims": HIDDEN_DIMS,
-            "dropout":     DROPOUT,
-            "cat_index":   cat_index,
-            "input_dim":   input_dim,
+            "model_state":           model.state_dict(),
+            "y_mean":                scaler_y_mean,
+            "y_scale":               scaler_y_scale,
+            "hidden_dims":           HIDDEN_DIMS,
+            "dropout":               DROPOUT,
+            "cat_index":             cat_index,
+            "input_dim":             input_dim,
+            "category_error_bounds": category_error_bounds,
         },
         str(MODEL_PATH),
     )
-    print(f"Model saved -> {MODEL_PATH}")
+    print(f"Model saved -> {MODEL_PATH}  (best seed: {best_seed})")
 
     diagnostics = {
         "total_products":         len(products),
         "valid_products":         len(valid_products),
-        "train_size":             len(idx_tr),
-        "val_size":               len(idx_val),
-        "test_size":              len(idx_te),
         "vocab_size":             len(vocab),
         "n_categories":           n_categories,
         "n_circularity_features": N_CIRC_FEATURES,
@@ -211,23 +283,32 @@ def run():
         "ghg_min":                GHG_MIN,
         "ghg_max":                GHG_MAX,
         "min_category_count":     MIN_CATEGORY_COUNT,
+        "seeds":                  SEEDS,
+        "best_seed":              best_seed,
+        "seed_results":           seed_results,
         "test_metrics": {
-            "mae":          test_results["mae"],
-            "rmse":         test_results["rmse"],
-            "nrmse":        test_results["nrmse"],
-            "r2_range":     test_results["r2_range"],
-            "r2_sample":    test_results["r2_sample"],
-            **{k: v for k, v in test_results.items() if k.startswith("within_")},
+            "mae":          best_test_res["mae"],
+            "rmse":         best_test_res["rmse"],
+            "nrmse":        best_test_res["nrmse"],
+            "r2_range":     best_test_res["r2_range"],
+            "r2_sample":    best_test_res["r2_sample"],
+            **{k: v for k, v in best_test_res.items() if k.startswith("within_")},
             "per_category": per_cat_metrics,
         },
-        "history": history,
+        "multi_seed_summary": {
+            "test_mae_mean": float(np.mean(test_maes)),
+            "test_mae_std":  float(np.std(test_maes)),
+            "test_r2_mean":  float(np.mean(test_r2s)),
+            "test_r2_std":   float(np.std(test_r2s)),
+        },
+        "history": best_history,
     }
     save_diagnostics(diagnostics)
     print(f"Diagnostics saved -> {DIAGNOSTICS_PATH}")
 
-    example_raw  = valid_products[idx_te[0]]["raw"]
+    example_raw  = valid_products[best_example_idx]["raw"]
     example_pred = predict_ghg(example_raw, vocab, checkpoint=MODEL_PATH)
-    example_true = valid_products[idx_te[0]]["ghg"]
+    example_true = valid_products[best_example_idx]["ghg"]
     print("\n-- Inference demo --")
     print(f"  True GHG : {example_true:.4f} kg CO2-eq")
     print(f"  Pred GHG : {example_pred:.4f} kg CO2-eq")

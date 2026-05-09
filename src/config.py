@@ -44,12 +44,14 @@ RESIDUALS_PATH     = FIGURES_DIR / "residuals_ghg.png"
 # ── Model hyperparameters ─────────────────────────────────────────────────────
 EMBED_DIM          = 300
 HIDDEN_DIMS        = [256, 128]
-DROPOUT            = 0.2
+DROPOUT            = 0.3
+WEIGHT_DECAY       = 3e-4
 LR                 = 1e-3
 EPOCHS             = 200
 BATCH_SIZE         = 64
 PATIENCE           = 30
 RANDOM_SEED        = 42
+SEEDS              = [42, 123, 456, 789, 2024]
 
 TARGET_FIELD       = "total_ghg"
 

@@ -13,12 +13,13 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from src.config import GHG_MAX, GHG_MIN
 from src.embeddings.baked import load_vocab_npz
 from src.inference.predict import LoadedModel, load_model, predict_ghg_with_loaded
 
@@ -116,6 +117,19 @@ class InferenceAdapter:
     ) -> float:
         product = build_product(category, materials, eol, origin_pct)
         return predict_ghg_with_loaded(product, self.vocab, self.loaded)
+
+    def prediction_range(
+        self, prediction: float, category: str
+    ) -> Optional[Tuple[float, float]]:
+        bounds = self.loaded.category_error_bounds
+        if not bounds or category not in bounds:
+            return None
+        b = bounds[category]
+        low  = max(GHG_MIN, prediction - b["p75"])
+        high = min(GHG_MAX, prediction - b["p25"])
+        if low >= high:
+            return None
+        return (low, high)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
