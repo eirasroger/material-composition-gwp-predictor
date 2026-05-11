@@ -1,25 +1,25 @@
 """
-Main window: a 2-column layout wiring the five input panels (category,
-materials, EoL, origin) to the prediction panel via a debounced predict
-callback that drives ``InferenceAdapter.predict``.
+Main window: multi-product comparison layout.
+Left column: scrollable stack of collapsible ProductCards (1–4) + add button.
+Right column: PredictionPanel (1 product) or ComparisonPanel (2+ products).
 """
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 import customtkinter as ctk
 
 from desktop_app.inference_adapter import EolShares, InferenceAdapter
-from desktop_app.ui.category_panel import CategoryPanel
-from desktop_app.ui.eol_panel import EolPanel
-from desktop_app.ui.materials_panel import MaterialsPanel
-from desktop_app.ui.origin_panel import OriginPanel
+from desktop_app.ui.comparison_panel import ComparisonPanel, ProductResult
 from desktop_app.ui.prediction_panel import PredictionPanel
+from desktop_app.ui.product_card import ProductCard
+from desktop_app.ui.theme import (
+    ACCENT, BG, BORDER, MAX_PRODUCTS, PRODUCT_COLORS, SURFACE, TEXT_SEC, font,
+)
 from desktop_app._version import __version__
-from desktop_app.ui.theme import ACCENT, BG, BORDER, SURFACE, font
 from src.utils import normalise_shares_to_100
 
 
@@ -38,7 +38,7 @@ class MainWindow(ctk.CTk):
         self.adapter = adapter
 
         self.title(f"GHG Predictor (version {__version__})")
-        self.geometry("1200x800")
+        self.geometry("1300x820")
         self.minsize(980, 700)
         self.configure(fg_color=BG)
 
@@ -49,102 +49,211 @@ class MainWindow(ctk.CTk):
             except Exception:
                 pass
 
-        self._pending_after: str | None = None
+        # per-card state
+        self._cards: list[ProductCard] = []
+        self._predictions: dict[int, tuple | None] = {}    # id(card) → (value, bounds) | None
+        self._statuses: dict[int, str] = {}                # id(card) → warning text
+        self._pending_after: dict[int, str | None] = {}    # id(card) → after-id | None
+        self._used_color_indices: set[int] = set()
+        self._card_color_idx: dict[int, int] = {}          # id(card) → PRODUCT_COLORS index
+        self._active_right_panel = None
 
         self.grid_columnconfigure(0, weight=1, uniform="cols")
         self.grid_columnconfigure(1, weight=1, uniform="cols")
         self.grid_rowconfigure(0, weight=1)
 
-        # ── left column: scrollable input stack ───────────────────────────────
-        left = ctk.CTkScrollableFrame(
+        # ── left column ───────────────────────────────────────────────────────
+        self._left = ctk.CTkScrollableFrame(
             self,
-            label_text="  Product configuration",
+            label_text="  Products",
             label_font=font(12, "bold"),
             label_fg_color=BORDER,
             fg_color=BG,
             scrollbar_button_color=BORDER,
             scrollbar_button_hover_color=ACCENT,
         )
-        left.grid(row=0, column=0, sticky="nsew", padx=(12, 6), pady=12)
+        self._left.grid(row=0, column=0, sticky="nsew", padx=(12, 6), pady=12)
 
-        self.category_panel = CategoryPanel(
-            left, categories=self.adapter.categories,
-            on_change=self._on_category_change,
+        self._add_btn = ctk.CTkButton(
+            self._left,
+            text="+ Add product",
+            height=36,
+            font=font(12, "bold"),
+            fg_color="transparent",
+            border_width=1,
+            border_color=BORDER,
+            text_color=TEXT_SEC,
+            hover_color=BORDER,
+            command=self._add_product,
         )
-        self.category_panel.pack(fill="x", pady=(6, 8))
 
-        self.materials_panel = MaterialsPanel(
-            left, material_choices=self.adapter.materials,
-            on_change=lambda _m: self._schedule_predict(),
-            category_materials=self.adapter.category_materials,
+        # ── right column ──────────────────────────────────────────────────────
+        self._right_container = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=10)
+        self._right_container.grid(row=0, column=1, sticky="nsew", padx=(6, 12), pady=12)
+        self._right_container.grid_rowconfigure(0, weight=1)
+        self._right_container.grid_columnconfigure(0, weight=1)
+
+        # ── initial product (permanent, cannot be removed) ─────────────────────
+        card1 = self._create_card(removable=False)
+        card1.pack(fill="x", pady=(0, 8))
+        self._add_btn.pack(fill="x", pady=(0, 4))
+
+        self._rebuild_right_panel()
+        self._schedule_predict(card1)
+
+    # ── card creation / removal ───────────────────────────────────────────────
+
+    def _next_color_index(self) -> int:
+        for i in range(MAX_PRODUCTS):
+            if i not in self._used_color_indices:
+                return i
+        raise RuntimeError("Max products reached")
+
+    def _create_card(self, removable: bool = True) -> ProductCard:
+        color_idx = self._next_color_index()
+        self._used_color_indices.add(color_idx)
+        n = len(self._cards) + 1
+        card = ProductCard(
+            self._left,
+            adapter=self.adapter,
+            color=PRODUCT_COLORS[color_idx],
+            on_change=self._on_card_change,
+            on_remove=self._on_card_remove if removable else None,
+            start_expanded=(n == 1),
+            default_name=f"Product {n}",
         )
-        self.materials_panel.pack(fill="x", pady=(0, 8))
+        self._cards.append(card)
+        self._predictions[id(card)] = None
+        self._statuses[id(card)] = ""
+        self._pending_after[id(card)] = None
+        self._card_color_idx[id(card)] = color_idx
+        return card
 
-        self.eol_panel = EolPanel(
-            left, on_change=lambda _s: self._schedule_predict(),
+    def _add_product(self) -> None:
+        if len(self._cards) >= MAX_PRODUCTS:
+            return
+        self._add_btn.pack_forget()
+        card = self._create_card(removable=True)
+        card.pack(fill="x", pady=(0, 8))
+        self._add_btn.pack(fill="x", pady=(0, 4))
+        self._add_btn.configure(
+            state="normal" if len(self._cards) < MAX_PRODUCTS else "disabled"
         )
-        self.eol_panel.pack(fill="x", pady=(0, 8))
+        self._rebuild_right_panel()
+        self._schedule_predict(card)
 
-        self.origin_panel = OriginPanel(
-            left, on_change=lambda _v: self._schedule_predict(),
-        )
-        self.origin_panel.pack(fill="x", pady=(0, 8))
-
-        # ── right column: prediction ──────────────────────────────────────────
-        right = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=10)
-        right.grid(row=0, column=1, sticky="nsew", padx=(6, 12), pady=12)
-        right.grid_rowconfigure(0, weight=1)
-        right.grid_columnconfigure(0, weight=1)
-
-        self.prediction_panel = PredictionPanel(right)
-        self.prediction_panel.grid(row=0, column=0, sticky="nsew")
-
-        self._schedule_predict()
-
-    # ── category / material wiring ────────────────────────────────────────────
-    def _on_category_change(self, category: Optional[str]) -> None:
-        self.materials_panel.set_category(category)
-        self._schedule_predict()
-
-    # ── prediction wiring ─────────────────────────────────────────────────────
-    def _schedule_predict(self) -> None:
-        if self._pending_after is not None:
+    def _on_card_remove(self, card: ProductCard) -> None:
+        if card not in self._cards:
+            return
+        pending = self._pending_after.pop(id(card), None)
+        if pending:
             try:
-                self.after_cancel(self._pending_after)
+                self.after_cancel(pending)
             except Exception:
                 pass
-        self._pending_after = self.after(DEBOUNCE_MS, self._predict_now)
+        color_idx = self._card_color_idx.pop(id(card), None)
+        if color_idx is not None:
+            self._used_color_indices.discard(color_idx)
+        self._predictions.pop(id(card), None)
+        self._statuses.pop(id(card), None)
+        self._cards.remove(card)
+        card.destroy()
+        self._add_btn.configure(state="normal")
+        self._rebuild_right_panel()
+        self._push_all_predictions()
 
-    def _predict_now(self) -> None:
-        self._pending_after = None
+    # ── right panel management ────────────────────────────────────────────────
 
-        category   = self.category_panel.selected()
-        materials  = self.materials_panel.materials()
-        eol_shares = self.eol_panel.shares()
-        origin_pct = self.origin_panel.value()
+    def _rebuild_right_panel(self) -> None:
+        if self._active_right_panel is not None:
+            self._active_right_panel.destroy()
+            self._active_right_panel = None
+
+        if len(self._cards) <= 1:
+            panel = PredictionPanel(self._right_container, color=PRODUCT_COLORS[0])
+        else:
+            panel = ComparisonPanel(self._right_container)
+
+        panel.grid(row=0, column=0, sticky="nsew")
+        self._active_right_panel = panel
+
+    def _push_all_predictions(self) -> None:
+        if self._active_right_panel is None or not self._cards:
+            return
+
+        if len(self._cards) == 1:
+            card = self._cards[0]
+            pred = self._predictions.get(id(card))
+            status = self._statuses.get(id(card), "")
+            if pred is None:
+                self._active_right_panel.clear_prediction()
+                self._active_right_panel.set_status(status)
+            else:
+                value, bounds = pred
+                self._active_right_panel.set_prediction(value, bounds)
+                self._active_right_panel.set_status(status)
+        else:
+            results: List[ProductResult] = []
+            for card in self._cards:
+                pred = self._predictions.get(id(card))
+                if pred is not None:
+                    value, bounds = pred
+                    results.append(ProductResult(
+                        name=card.name(),
+                        value=value,
+                        bounds=bounds,
+                        color=card.color,
+                    ))
+            self._active_right_panel.update(results)
+
+    # ── prediction wiring ─────────────────────────────────────────────────────
+
+    def _on_card_change(self, card: ProductCard) -> None:
+        self._schedule_predict(card)
+
+    def _schedule_predict(self, card: ProductCard) -> None:
+        pending = self._pending_after.get(id(card))
+        if pending is not None:
+            try:
+                self.after_cancel(pending)
+            except Exception:
+                pass
+        self._pending_after[id(card)] = self.after(
+            DEBOUNCE_MS, lambda c=card: self._predict_now(c)
+        )
+
+    def _predict_now(self, card: ProductCard) -> None:
+        self._pending_after[id(card)] = None
+
+        category   = card.category()
+        materials  = card.materials()
+        eol_shares = card.eol_shares()
+        origin_pct = card.origin_pct()
 
         if category is None:
-            self.prediction_panel.clear_prediction()
-            self.prediction_panel.set_status("Pick a product category to begin.")
+            self._predictions[id(card)] = None
+            self._statuses[id(card)] = "Pick a product category to begin."
+            self._push_all_predictions()
             return
         if not materials:
-            self.prediction_panel.clear_prediction()
-            self.prediction_panel.set_status(
-                "Add at least one material from the dropdown."
-            )
+            self._predictions[id(card)] = None
+            self._statuses[id(card)] = "Add at least one material."
+            self._push_all_predictions()
             return
 
-        status_lines: List[str] = []
+        status_parts: list[str] = []
         mat_total = sum(m["percentage"] for m in materials)
         if abs(mat_total - 100.0) > 0.05:
-            status_lines.append(
+            status_parts.append(
                 f"Materials sum to {mat_total:.1f}% — predicted as if normalised."
             )
-        eol_total = self.eol_panel.total()
+        eol_total = (
+            eol_shares.recycling + eol_shares.hazardous
+            + eol_shares.inert + eol_shares.incineration
+        )
         if abs(eol_total - 100.0) > 0.05:
-            status_lines.append(
-                f"End-of-life pathways sum to {eol_total:.1f}% — "
-                "predicted as if normalised."
+            status_parts.append(
+                f"End-of-life pathways sum to {eol_total:.1f}% — predicted as if normalised."
             )
 
         eol_for_pred = self._normalised_eol(eol_shares)
@@ -157,13 +266,15 @@ class MainWindow(ctk.CTk):
                 origin_pct=origin_pct,
             )
         except Exception as exc:
-            self.prediction_panel.clear_prediction()
-            self.prediction_panel.set_status(f"Prediction failed: {exc}")
+            self._predictions[id(card)] = None
+            self._statuses[id(card)] = f"Prediction failed: {exc}"
+            self._push_all_predictions()
             return
 
         bounds = self.adapter.prediction_range(value, category)
-        self.prediction_panel.set_prediction(value, bounds)
-        self.prediction_panel.set_status("\n".join(status_lines))
+        self._predictions[id(card)] = (value, bounds)
+        self._statuses[id(card)] = "\n".join(status_parts)
+        self._push_all_predictions()
 
     @staticmethod
     def _normalised_eol(eol: EolShares) -> EolShares:

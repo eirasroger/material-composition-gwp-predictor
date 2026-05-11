@@ -13,6 +13,14 @@ TEXT_PRI   = "#e4f0ec"
 TEXT_SEC   = "#7aada0"
 TEXT_DIM   = "#456058"
 
+MAX_PRODUCTS = 4
+PRODUCT_COLORS = [
+    "#3ecf8e",  # 0 — green (matches ACCENT)
+    "#e07b39",  # 1 — amber-orange
+    "#7b8fe0",  # 2 — soft indigo
+    "#d96b8e",  # 3 — rose
+]
+
 SUM_GREEN  = (ACCENT, ACCENT)
 SUM_AMBER  = ("#d49b3a", "#d49b3a")
 SUM_RED    = ("#d44a4a", "#d44a4a")

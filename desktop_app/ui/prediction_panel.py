@@ -22,8 +22,9 @@ from src.config import GHG_MAX, GHG_MIN
 
 
 class PredictionPanel(ctk.CTkFrame):
-    def __init__(self, master) -> None:
+    def __init__(self, master, color: str = ACCENT) -> None:
         super().__init__(master, fg_color="transparent")
+        self._color = color
 
         # ── header label ──────────────────────────────────────────────────────
         ctk.CTkLabel(
@@ -38,7 +39,7 @@ class PredictionPanel(ctk.CTkFrame):
             self,
             text="— kg CO₂eq / kg",
             font=font(34, "bold"),
-            text_color=ACCENT,
+            text_color=color,
         )
         self._value_label.pack(anchor="w", padx=24, pady=(4, 16))
 
@@ -143,18 +144,18 @@ class PredictionPanel(ctk.CTkFrame):
                 r_high = min(GHG_MAX, bounds[1])
                 self._ax.barh(
                     [0.5], [r_high - r_low], left=r_low, height=0.52,
-                    color=ACCENT + "28", edgecolor=ACCENT + "70", linewidth=0.8,
+                    color=self._color + "28", edgecolor=self._color + "70", linewidth=0.8,
                     zorder=1,
                 )
             # Filled portion of track
             self._ax.barh(
                 [0.5], [clamped - GHG_MIN], left=GHG_MIN, height=0.28,
-                color=ACCENT + "55", edgecolor="none", zorder=2,
+                color=self._color + "55", edgecolor="none", zorder=2,
             )
             # Needle line + dot
-            self._ax.axvline(clamped, color=ACCENT, linewidth=2, alpha=0.9, zorder=3)
+            self._ax.axvline(clamped, color=self._color, linewidth=2, alpha=0.9, zorder=3)
             self._ax.plot(
-                [clamped], [0.5], marker="o", color=ACCENT,
+                [clamped], [0.5], marker="o", color=self._color,
                 markersize=9, zorder=4, markeredgecolor=SURFACE, markeredgewidth=1.5,
             )
             if value > GHG_MAX:
