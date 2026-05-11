@@ -3614,7 +3614,7 @@
     "Industrial Residual Wood Powder",
     "Calcium Carbonate Powder"
   ],
-  "2019:14-c-PCR-003 Concrete and concrete elements (EN 16757) 1.0.0": [
+  "Concrete and concrete elements (c-PCR-003)": [
     "Water",
     "Cement",
     "Admixtures",
@@ -3837,7 +3837,7 @@
     "Sand Mix 0/4 mm",
     "Quarry Sand 0-4 mm"
   ],
-  "2019:14-c-PCR-005 Thermal insulation products (EN 16783) (c-PCR to PCR 2019:14) 1.0.0": [
+  "Thermal insulation products (c-PCR-005)": [
     "Additives",
     "Bio-based binder",
     "Binder",
@@ -4055,7 +4055,7 @@
     "Graphic label",
     "Dolomite-Limestone"
   ],
-  "2019:14-c-PCR-001 Being updated - Cement and building lime (EN 16908) (c-PCR to PCR 2019:14) 1.0.0": [
+  "Cement and building lime (c-PCR-001)": [
     "Clinker",
     "Limestone",
     "Gypsum",
@@ -4194,7 +4194,7 @@
     "Additional constituents",
     "Ground granulated blast furnace slag"
   ],
-  "2019:14-c-PCR-007 Being Updated - Windows and doors (EN 17213) (c-PCR to PCR 2019:14) 1.0.0": [
+  "Windows and doors (c-PCR-007)": [
     "Aluminium",
     "Glass",
     "Steel",
@@ -4377,7 +4377,7 @@
     "ABS",
     "Gypsum"
   ],
-  "2019:14-c-PCR-004 Being updated - Resilient, textile and laminate floor coverings (EN 16810) 1.0.0": [
+  "Resilient, textile and laminate floor coverings (c-PCR-004)": [
     "Additives",
     "Pigments",
     "Surface Treatment",
@@ -4552,7 +4552,7 @@
     "Polyethylene",
     "Paper"
   ],
-  "2019:14-c-PCR-021 Furniture and components of furniture (c-PCR to PCR 2019:14) 2.0.1": [
+  "Furniture and components of furniture (c-PCR-021)": [
     "Steel",
     "Wood",
     "Powder coating",
@@ -4747,7 +4747,7 @@
     "Cork floor mat",
     "Back pressure paper"
   ],
-  "2019:14-c-PCR-014 Acoustical ceiling and wall solutions (c-PCR to PCR 2019:14) 1.0.0": [
+  "Acoustical ceiling and wall solutions (c-PCR-014)": [
     "Glass wool",
     "Glass tissue",
     "Waterborne paint",
@@ -4812,7 +4812,7 @@
     "Total steel for profiles",
     "Polyurethane glue"
   ],
-  "2019:14-c-PCR-006 Being updated - Wood and wood-based products for use in construction (EN 16485) 1.0.0": [
+  "Wood and wood-based products (c-PCR-006)": [
     "Wood",
     "Glue",
     "Adhesive",
@@ -5004,7 +5004,7 @@
     "Koppers Exterior Fire-X",
     "Koppers Fire Pro"
   ],
-  "2019:14-c-PCR-017 Technical-chemical products (for construction sector) (c-PCR to PCR 2019:14) adopted from EPD Norway 2022-07-08": [
+  "Technical-chemical products (c-PCR-017)": [
     "Additives",
     "Fillers",
     "Binders",
@@ -5051,7 +5051,7 @@
     "Gold",
     "Phosphate esters"
   ],
-  "2019:14-c-PCR-009 Being updated - Flat glass products used in buildings and other construction works (EN 17074) (c-PCR to PCR 2019:14) 1.0.0": [
+  "Flat glass products (c-PCR-009)": [
     "Glass",
     "Coating",
     "Aluminium",
@@ -5132,7 +5132,7 @@
     "Wrought aluminium",
     "Agron, gas"
   ],
-  "2019:14-c-PCR-008 Lifts (elevators) (c-PCR to PCR 2019:14) 1.0.2": [
+  "Lifts (elevators) (c-PCR-008)": [
     "Non-ferrous metals",
     "Inorganic materials",
     "Organic materials",
@@ -5195,7 +5195,7 @@
     "LCD display",
     "Steel"
   ],
-  "2012:01-Sub-PCR-C Sub-PCR-C Acoustical systems solutions (construction product) 2021-11-08": [
+  "Acoustical systems solutions (Sub-PCR-C)": [
     "Glass tissue",
     "Glass wool",
     "Waterborne paint",
@@ -5209,7 +5209,7 @@
     "Surface",
     "Stonewool"
   ],
-  "2019:14-c-PCR-010 Guardrails and bridge parapets (c-PCR to PCR 2019:14) 1.0.1": [
+  "Guardrails and bridge parapets (c-PCR-010)": [
     "Steel",
     "Zinc",
     "Steel Corten",
