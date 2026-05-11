@@ -28,7 +28,7 @@ class CategoryPanel(ctk.CTkFrame):
 
         ctk.CTkLabel(
             self,
-            text="Select the EPD product category.",
+            text="Select the product category.",
             font=font(11),
             text_color=TEXT_SEC,
             anchor="w",

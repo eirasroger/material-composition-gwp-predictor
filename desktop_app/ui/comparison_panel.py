@@ -139,14 +139,14 @@ class ComparisonPanel(ctk.CTkFrame):
             ax.text(
                 i, ann_y, f"{p.value:.3f}",
                 ha="center", va="bottom",
-                color=p.color, fontsize=8, fontweight="bold",
+                color=p.color, fontsize=10, fontweight="bold",
             )
             # Product name drawn inside the negative zone, below the x-axis line
             ax.text(
                 i, -label_zone * 0.52,
                 p.name[:14],
                 ha="center", va="center",
-                color=p.color, fontsize=8.5, fontweight="bold",
+                color=p.color, fontsize=10.5, fontweight="bold",
             )
 
         # Separator line at y=0 (visual x-axis between bars and names)
@@ -155,8 +155,8 @@ class ComparisonPanel(ctk.CTkFrame):
         ax.set_xlim(x_left, x_right)
         ax.set_ylim(-label_zone, y_max)
         ax.set_xticks([])
-        ax.set_ylabel("kg CO₂eq / kg", color=TEXT_SEC, fontsize=8, labelpad=4)
-        ax.tick_params(axis="y", colors=TEXT_SEC, labelsize=7.5)
+        ax.set_ylabel("kg CO₂eq / kg", color=TEXT_SEC, fontsize=10, labelpad=4)
+        ax.tick_params(axis="y", colors=TEXT_SEC, labelsize=10)
         ax.set_facecolor(SURFACE)
         for spine in ("top", "right", "bottom"):
             ax.spines[spine].set_visible(False)
@@ -189,7 +189,7 @@ class ComparisonPanel(ctk.CTkFrame):
                 ax.text(
                     label_x, y, row["label"],
                     ha="left", va="center",
-                    color=TEXT_SEC, fontsize=8, fontweight="bold",
+                    color=TEXT_SEC, fontsize=10.5, fontweight="bold",
                 )
                 # horizontal rule spanning the full axis width
                 ax.axhline(
@@ -201,20 +201,20 @@ class ComparisonPanel(ctk.CTkFrame):
                 ax.text(
                     label_x + 0.12, y, row["label"],
                     ha="left", va="center",
-                    color=TEXT_DIM, fontsize=7.5,
+                    color=TEXT_DIM, fontsize=10,
                 )
                 for i, val in enumerate(row["values"]):
                     if val is None:
                         ax.text(
                             i, y, "—",
                             ha="center", va="center",
-                            color=TEXT_DIM, fontsize=7.5,
+                            color=TEXT_DIM, fontsize=10,
                         )
                     else:
                         ax.text(
                             i, y, val,
                             ha="center", va="center",
-                            color=TEXT_SEC, fontsize=7.5,
+                            color=TEXT_SEC, fontsize=10,
                         )
 
     # ── row builder ───────────────────────────────────────────────────────────
