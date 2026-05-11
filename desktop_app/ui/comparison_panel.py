@@ -1,14 +1,18 @@
 """
-Comparison panel: bar chart comparing up to 4 products side-by-side.
-Each bar shows the point-estimate GHG with an error bar spanning the
-plausible range (lower, upper). Shown in the right column when 2+ products
-are configured.
+Comparison panel: a single matplotlib figure with two vertically stacked
+subplots sharing the same x-axis.
+
+  Top  — bar chart: one bar per product, error bars for plausible range.
+  Bottom — summary table: normalised material / EoL / origin values aligned
+           under each bar. Category row appears only when categories differ.
+
+Products with no prediction are omitted entirely.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import tkinter as tk
 
@@ -18,115 +22,302 @@ matplotlib.use("TkAgg")  # noqa: E402
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
 
-from desktop_app.ui.theme import BORDER, SURFACE, TEXT_DIM, TEXT_SEC, font
+from desktop_app.ui.theme import ACCENT, BORDER, BG, SURFACE, TEXT_DIM, TEXT_SEC, font
 
 
 @dataclass
 class ProductResult:
     name: str
     value: float
-    bounds: Optional[tuple]   # (lower, upper) plausible range, or None
+    bounds: Optional[tuple]         # (lower, upper) plausible range, or None
     color: str
+    category: str
+    materials: List[Dict]           # normalised: [{"name": str, "percentage": float}]
+    eol: Any                        # EolShares (normalised)
+    origin_pct: float
+
+
+# ── layout constants ──────────────────────────────────────────────────────────
+_FIG_W       = 5.6    # figure width in inches
+_DPI         = 100
+_BAR_H       = 4.0    # bar chart subplot height in inches
+_ROW_H       = 0.26   # height per summary row in inches
+_LABEL_W     = 1.3    # x-units reserved for the label column (negative x side)
+_LEFT_MARGIN = 0.10   # figure left margin fraction (space for y-axis label)
+_RIGHT_MARGIN= 0.97   # figure right margin fraction
 
 
 class ComparisonPanel(ctk.CTkFrame):
     def __init__(self, master) -> None:
         super().__init__(master, fg_color="transparent")
 
-        ctk.CTkLabel(
+        # Scrollable container so tall summary tables don't get clipped
+        self._scroll = ctk.CTkScrollableFrame(
             self,
-            text="Predicted greenhouse gas emissions",
-            font=font(12),
-            text_color=TEXT_SEC,
-        ).pack(anchor="w", padx=24, pady=(28, 8))
+            fg_color=SURFACE,
+            corner_radius=0,
+            label_text="",
+            label_fg_color=SURFACE,
+            scrollbar_button_color=BORDER,
+            scrollbar_button_hover_color=ACCENT,
+        )
+        self._scroll.pack(fill="both", expand=True)
 
-        self._fig = Figure(figsize=(4.4, 3.8), dpi=100)
-        self._fig.patch.set_facecolor(SURFACE)
-        self._ax = self._fig.add_subplot(111)
+        self._canvas_host = tk.Frame(
+            self._scroll, bg=SURFACE, highlightthickness=0, bd=0,
+        )
+        self._canvas_host.pack(fill="x")
 
-        canvas_host = tk.Frame(self, highlightthickness=0, bd=0, bg=SURFACE)
-        canvas_host.pack(fill="x", padx=24, pady=(0, 24))
-        self._mpl_canvas = FigureCanvasTkAgg(self._fig, master=canvas_host)
-        widget = self._mpl_canvas.get_tk_widget()
-        widget.pack(fill="x")
-        widget.configure(bg=SURFACE, highlightthickness=0)
+        self._fig: Optional[Figure] = None
+        self._mpl_canvas: Optional[FigureCanvasTkAgg] = None
 
-        self._draw_empty()
+        self._show_empty()
+
+    # ── public ───────────────────────────────────────────────────────────────
 
     def update(self, products: List[ProductResult]) -> None:
-        self._ax.clear()
         if not products:
-            self._draw_empty()
+            self._show_empty()
             return
 
-        uppers = [p.bounds[1] for p in products if p.bounds is not None]
-        raw_max = max(uppers) if uppers else max(p.value for p in products)
-        y_max = max(raw_max * 1.20, 1.0)
+        rows = self._build_rows(products)
+        n_prod = len(products)
 
-        x_pos = list(range(len(products)))
-        names = [p.name[:16] for p in products]
+        summary_h = max(len(rows) * _ROW_H + 0.3, 1.0)
+        total_h   = _BAR_H + summary_h
+
+        fig = Figure(figsize=(_FIG_W, total_h), dpi=_DPI)
+        fig.patch.set_facecolor(SURFACE)
+
+        gs = fig.add_gridspec(
+            2, 1,
+            height_ratios=[_BAR_H, summary_h],
+            hspace=0.0,
+        )
+        ax_bars    = fig.add_subplot(gs[0])
+        ax_summary = fig.add_subplot(gs[1])
+
+        x_left  = -_LABEL_W - 0.2
+        x_right = n_prod - 0.4
+
+        self._draw_bars(ax_bars, products, x_left, x_right)
+        self._draw_summary(ax_summary, rows, n_prod, x_left, x_right)
+
+        fig.subplots_adjust(
+            left=_LEFT_MARGIN, right=_RIGHT_MARGIN,
+            top=0.97, bottom=0.02,
+            hspace=0.02,
+        )
+
+        self._set_canvas(fig)
+
+    # ── bar chart subplot ─────────────────────────────────────────────────────
+
+    def _draw_bars(self, ax, products, x_left, x_right) -> None:
+        uppers  = [p.bounds[1] for p in products if p.bounds is not None]
+        raw_max = max(uppers) if uppers else max(p.value for p in products)
+        y_max   = max(raw_max * 1.20, 1.0)
+
+        # Small zone below y=0 for product name labels
+        label_zone = y_max * 0.07
 
         for i, p in enumerate(products):
-            self._ax.bar(
+            ax.bar(
                 i, p.value,
-                color=p.color + "bb",
-                edgecolor=p.color,
-                linewidth=0.8,
-                width=0.5,
-                zorder=2,
+                color=p.color + "bb", edgecolor=p.color,
+                linewidth=0.8, width=0.5, zorder=2,
             )
             if p.bounds is not None:
                 lo, hi = p.bounds
-                self._ax.errorbar(
+                ax.errorbar(
                     i, p.value,
                     yerr=[[max(0.0, p.value - lo)], [max(0.0, hi - p.value)]],
-                    fmt="none",
-                    color=p.color,
-                    capsize=6,
-                    elinewidth=1.5,
-                    capthick=1.5,
-                    zorder=3,
+                    fmt="none", color=p.color,
+                    capsize=6, elinewidth=1.5, capthick=1.5, zorder=3,
                 )
             ann_y = (p.bounds[1] if p.bounds else p.value) + y_max * 0.025
-            self._ax.text(
-                i, ann_y,
-                f"{p.value:.3f}",
+            ax.text(
+                i, ann_y, f"{p.value:.3f}",
                 ha="center", va="bottom",
-                color=p.color,
-                fontsize=9,
-                fontweight="bold",
+                color=p.color, fontsize=8, fontweight="bold",
+            )
+            # Product name drawn inside the negative zone, below the x-axis line
+            ax.text(
+                i, -label_zone * 0.52,
+                p.name[:14],
+                ha="center", va="center",
+                color=p.color, fontsize=8.5, fontweight="bold",
             )
 
-        self._ax.set_xlim(-0.6, len(products) - 0.4)
-        self._ax.set_ylim(0, y_max)
-        self._ax.set_xticks(x_pos)
-        self._ax.set_xticklabels(names, fontsize=9, color=TEXT_SEC)
-        self._ax.set_ylabel("kg CO₂eq / kg", color=TEXT_SEC, fontsize=9, labelpad=6)
-        self._ax.tick_params(axis="y", colors=TEXT_SEC, labelsize=8)
-        self._ax.tick_params(axis="x", length=0)
-        self._ax.set_facecolor(SURFACE)
-        for spine in ("top", "right"):
-            self._ax.spines[spine].set_visible(False)
-        self._ax.spines["bottom"].set_color(BORDER)
-        self._ax.spines["left"].set_color(BORDER)
+        # Separator line at y=0 (visual x-axis between bars and names)
+        ax.axhline(0, color=BORDER, linewidth=1.0, zorder=1)
 
-        self._fig.tight_layout(pad=1.5)
-        self._mpl_canvas.draw_idle()
+        ax.set_xlim(x_left, x_right)
+        ax.set_ylim(-label_zone, y_max)
+        ax.set_xticks([])
+        ax.set_ylabel("kg CO₂eq / kg", color=TEXT_SEC, fontsize=8, labelpad=4)
+        ax.tick_params(axis="y", colors=TEXT_SEC, labelsize=7.5)
+        ax.set_facecolor(SURFACE)
+        for spine in ("top", "right", "bottom"):
+            ax.spines[spine].set_visible(False)
+        ax.spines["left"].set_color(BORDER)
 
-    def _draw_empty(self) -> None:
-        self._ax.clear()
-        self._ax.set_facecolor(SURFACE)
-        for spine in self._ax.spines.values():
+    # ── summary table subplot ─────────────────────────────────────────────────
+
+    def _draw_summary(self, ax, rows, n_prod, x_left, x_right) -> None:
+        ax.set_facecolor(SURFACE)
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_xlim(x_left, x_right)
+
+        n_rows = len(rows)
+        # y=0 at top, y=-(n_rows-1) at bottom
+        ax.set_ylim(-n_rows - 0.2, 0.8)
+
+        label_x = x_left + 0.08
+
+        for idx, row in enumerate(rows):
+            y = -idx
+            rtype = row["type"]
+
+            if rtype == "spacer":
+                continue
+
+            if rtype == "section":
+                ax.text(
+                    label_x, y, row["label"],
+                    ha="left", va="center",
+                    color=TEXT_SEC, fontsize=8, fontweight="bold",
+                )
+                # horizontal rule spanning the full axis width
+                ax.axhline(
+                    y - 0.45,
+                    xmin=0.0, xmax=1.0,
+                    color=BORDER, linewidth=0.5, zorder=1,
+                )
+            elif rtype in ("data", "category"):
+                ax.text(
+                    label_x + 0.12, y, row["label"],
+                    ha="left", va="center",
+                    color=TEXT_DIM, fontsize=7.5,
+                )
+                for i, val in enumerate(row["values"]):
+                    if val is None:
+                        ax.text(
+                            i, y, "—",
+                            ha="center", va="center",
+                            color=TEXT_DIM, fontsize=7.5,
+                        )
+                    else:
+                        ax.text(
+                            i, y, val,
+                            ha="center", va="center",
+                            color=TEXT_SEC, fontsize=7.5,
+                        )
+
+    # ── row builder ───────────────────────────────────────────────────────────
+
+    def _build_rows(self, products: List[ProductResult]) -> List[dict]:
+        rows: List[dict] = []
+
+        # Materials
+        rows.append({"type": "section", "label": "Materials"})
+
+        mat_count: Dict[str, int] = {}
+        for p in products:
+            for m in p.materials:
+                mat_count[m["name"]] = mat_count.get(m["name"], 0) + 1
+
+        # Most-shared first, then alphabetical within each count group
+        all_mats = sorted(mat_count, key=lambda n: (-mat_count[n], n.lower()))
+
+        mat_lookup = [
+            {m["name"]: m["percentage"] for m in p.materials}
+            for p in products
+        ]
+        for mat in all_mats:
+            vals = []
+            for lk in mat_lookup:
+                pct = lk.get(mat)
+                vals.append(f"{pct:.1f}%" if pct is not None else None)
+            rows.append({
+                "type": "data",
+                "label": mat[:18],
+                "values": vals,
+            })
+
+        rows.append({"type": "spacer"})
+
+        # End-of-life
+        rows.append({"type": "section", "label": "End-of-life"})
+        for key, label in (
+            ("recycling",    "Recycling"),
+            ("hazardous",    "Hazardous"),
+            ("inert",        "Inert landfill"),
+            ("incineration", "Incineration"),
+        ):
+            rows.append({
+                "type": "data",
+                "label": label,
+                "values": [f"{getattr(p.eol, key):.1f}%" for p in products],
+            })
+
+        rows.append({"type": "spacer"})
+
+        # Circular origin
+        rows.append({"type": "section", "label": "Circular Origin"})
+        rows.append({
+            "type": "data",
+            "label": "Origin %",
+            "values": [f"{p.origin_pct:.1f}%" for p in products],
+        })
+
+        # Category — only if products differ; placed last
+        cats = [p.category for p in products]
+        if len(set(cats)) > 1:
+            rows.append({"type": "spacer"})
+            rows.append({"type": "section", "label": "Category"})
+            rows.append({
+                "type": "data",
+                "label": "c-PCR",
+                "values": [p.category for p in products],
+            })
+
+        return rows
+
+    # ── canvas management ─────────────────────────────────────────────────────
+
+    def _set_canvas(self, fig: Figure) -> None:
+        if self._mpl_canvas is not None:
+            self._mpl_canvas.get_tk_widget().destroy()
+            self._mpl_canvas = None
+        if self._fig is not None:
+            self._fig.clf()
+            self._fig = None
+
+        self._fig = fig
+        self._mpl_canvas = FigureCanvasTkAgg(fig, master=self._canvas_host)
+        widget = self._mpl_canvas.get_tk_widget()
+        widget.pack(fill="x")
+        widget.configure(bg=SURFACE, highlightthickness=0)
+        self._mpl_canvas.draw()
+
+    def _show_empty(self) -> None:
+        fig = Figure(figsize=(_FIG_W, 2.0), dpi=_DPI)
+        fig.patch.set_facecolor(SURFACE)
+        ax = fig.add_subplot(111)
+        ax.set_facecolor(SURFACE)
+        for spine in ax.spines.values():
             spine.set_color(BORDER)
-        self._ax.text(
-            0.5, 0.5,
-            "Configure products to see comparison",
+        ax.text(
+            0.5, 0.5, "Configure products to see comparison",
             ha="center", va="center",
-            color=TEXT_DIM,
-            fontsize=11,
-            transform=self._ax.transAxes,
+            color=TEXT_DIM, fontsize=11,
+            transform=ax.transAxes,
         )
-        self._ax.set_xticks([])
-        self._ax.set_yticks([])
-        self._fig.tight_layout(pad=1.5)
-        self._mpl_canvas.draw_idle()
+        ax.set_xticks([])
+        ax.set_yticks([])
+        fig.tight_layout(pad=0.5)
+        self._set_canvas(fig)

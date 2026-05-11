@@ -1,6 +1,7 @@
 """
-Collapsible product card: one full set of input panels (category, materials,
-EoL, origin) for a single product in the comparison workflow.
+Collapsible product card: one full set of input panels (materials, EoL, origin)
+for a single product. Category is shared across cards by default; the
+"Different category" switch reveals a local override.
 """
 
 from __future__ import annotations
@@ -26,13 +27,12 @@ class ProductCard(ctk.CTkFrame):
         color: str,
         on_change: Callable[["ProductCard"], None],
         on_remove: Optional[Callable[["ProductCard"], None]] = None,
-        start_expanded: bool = True,
         default_name: str = "Product",
     ) -> None:
         super().__init__(master, fg_color=SURFACE, corner_radius=10)
         self._color = color
         self._on_change = on_change
-        self._expanded = start_expanded
+        self._expanded = False
 
         # ── header ────────────────────────────────────────────────────────────
         header = ctk.CTkFrame(self, fg_color=SURFACE_HI, corner_radius=8)
@@ -42,7 +42,6 @@ class ProductCard(ctk.CTkFrame):
         dot.pack(side="left", padx=(10, 8), pady=12)
         dot.pack_propagate(False)
 
-        # pack right-side buttons before name so name fills remaining space
         if on_remove is not None:
             ctk.CTkButton(
                 header,
@@ -57,7 +56,7 @@ class ProductCard(ctk.CTkFrame):
 
         self._toggle_btn = ctk.CTkButton(
             header,
-            text="▼" if start_expanded else "▶",
+            text="▶",
             width=28, height=28,
             fg_color="transparent",
             hover_color=BORDER,
@@ -68,25 +67,44 @@ class ProductCard(ctk.CTkFrame):
         self._toggle_btn.pack(side="right", padx=(4, 4), pady=6)
 
         self._name_var = tk.StringVar(value=default_name)
-        ctk.CTkEntry(
+        self._name_idle_after: str | None = None
+        self._name_entry = ctk.CTkEntry(
             header,
             textvariable=self._name_var,
             fg_color=SURFACE_HI,
             border_width=0,
             font=font(13, "bold"),
             text_color=TEXT_SEC,
-        ).pack(side="left", fill="x", expand=True, padx=(0, 4))
-        self._name_var.trace_add("write", lambda *_: on_change(self))
+        )
+        self._name_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        self._name_var.trace_add("write", self._on_name_write)
+        self._name_entry.bind("<FocusOut>", lambda e: self._fire_name_change())
+        self._name_entry.bind("<Return>", lambda e: self._fire_name_change())
 
         # ── body ──────────────────────────────────────────────────────────────
         self._body = ctk.CTkFrame(self, fg_color="transparent")
 
-        self._category_panel = CategoryPanel(
-            self._body,
-            categories=adapter.categories,
-            on_change=self._on_category_change,
+        # Override section: switch + optional local CategoryPanel
+        override_frame = ctk.CTkFrame(self._body, fg_color="transparent")
+        override_frame.pack(fill="x")
+
+        self._override_var = tk.BooleanVar(value=False)
+        self._override_switch = ctk.CTkSwitch(
+            override_frame,
+            text="Different category",
+            variable=self._override_var,
+            command=self._on_override_toggle,
+            font=font(11),
+            text_color=TEXT_SEC,
         )
-        self._category_panel.pack(fill="x", pady=(0, 8))
+        self._override_switch.pack(anchor="w", padx=14, pady=(10, 4))
+
+        self._local_category_panel = CategoryPanel(
+            override_frame,
+            categories=adapter.categories,
+            on_change=self._on_local_category_change,
+        )
+        # Starts hidden; shown when override is toggled on
 
         self._materials_panel = MaterialsPanel(
             self._body,
@@ -94,7 +112,7 @@ class ProductCard(ctk.CTkFrame):
             on_change=lambda _m: on_change(self),
             category_materials=adapter.category_materials,
         )
-        self._materials_panel.pack(fill="x", pady=(0, 8))
+        self._materials_panel.pack(fill="x", pady=(4, 8))
 
         self._eol_panel = EolPanel(
             self._body,
@@ -108,8 +126,7 @@ class ProductCard(ctk.CTkFrame):
         )
         self._origin_panel.pack(fill="x")
 
-        if start_expanded:
-            self._body.pack(fill="x", padx=6, pady=(4, 6))
+        # Body starts hidden (all cards start collapsed)
 
     # ── public read interface ─────────────────────────────────────────────────
 
@@ -117,8 +134,16 @@ class ProductCard(ctk.CTkFrame):
         v = self._name_var.get().strip()
         return v if v else "Product"
 
-    def category(self) -> Optional[str]:
-        return self._category_panel.selected()
+    def has_category_override(self) -> bool:
+        return self._override_var.get()
+
+    def local_category(self) -> Optional[str]:
+        return self._local_category_panel.selected()
+
+    def apply_shared_category(self, category: Optional[str]) -> None:
+        """Update materials ordering to match the shared category (no-op if overriding)."""
+        if not self._override_var.get():
+            self._materials_panel.set_category(category)
 
     def materials(self) -> List[Dict]:
         return self._materials_panel.materials()
@@ -157,6 +182,30 @@ class ProductCard(ctk.CTkFrame):
 
     # ── internal wiring ───────────────────────────────────────────────────────
 
-    def _on_category_change(self, category: Optional[str]) -> None:
+    def _on_name_write(self, *_) -> None:
+        if self._name_idle_after is not None:
+            try:
+                self._name_entry.after_cancel(self._name_idle_after)
+            except Exception:
+                pass
+        self._name_idle_after = self._name_entry.after(2000, self._fire_name_change)
+
+    def _fire_name_change(self) -> None:
+        if self._name_idle_after is not None:
+            try:
+                self._name_entry.after_cancel(self._name_idle_after)
+            except Exception:
+                pass
+            self._name_idle_after = None
+        self._on_change(self)
+
+    def _on_override_toggle(self) -> None:
+        if self._override_var.get():
+            self._local_category_panel.pack(fill="x", pady=(0, 4))
+        else:
+            self._local_category_panel.pack_forget()
+        self._on_change(self)
+
+    def _on_local_category_change(self, category: Optional[str]) -> None:
         self._materials_panel.set_category(category)
         self._on_change(self)

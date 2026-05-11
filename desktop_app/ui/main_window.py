@@ -1,18 +1,26 @@
 """
 Main window: multi-product comparison layout.
-Left column: scrollable stack of collapsible ProductCards (1–4) + add button.
-Right column: PredictionPanel (1 product) or ComparisonPanel (2+ products).
+
+Left column
+  ├── Shared CategoryPanel (applies to all cards unless overridden)
+  ├── ProductCard 1 … 4  (collapsible; each can override category)
+  └── "+ Add product" button
+
+Right column
+  Single product → PredictionPanel (unchanged single-product view)
+  2+ products    → ComparisonPanel (bar chart + aligned summary table)
 """
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import customtkinter as ctk
 
 from desktop_app.inference_adapter import EolShares, InferenceAdapter
+from desktop_app.ui.category_panel import CategoryPanel
 from desktop_app.ui.comparison_panel import ComparisonPanel, ProductResult
 from desktop_app.ui.prediction_panel import PredictionPanel
 from desktop_app.ui.product_card import ProductCard
@@ -27,8 +35,11 @@ DEBOUNCE_MS = 150
 
 
 def _icon_path() -> Path:
-    base = Path(getattr(sys, "_MEIPASS", "")) / "assets" if getattr(sys, "frozen", False) \
+    base = (
+        Path(getattr(sys, "_MEIPASS", "")) / "assets"
+        if getattr(sys, "frozen", False)
         else Path(__file__).resolve().parents[1] / "assets"
+    )
     return base / "icon.ico"
 
 
@@ -49,9 +60,12 @@ class MainWindow(ctk.CTk):
             except Exception:
                 pass
 
+        # shared category state
+        self._shared_category: Optional[str] = None
+
         # per-card state
         self._cards: list[ProductCard] = []
-        self._predictions: dict[int, tuple | None] = {}    # id(card) → (value, bounds) | None
+        self._predictions: dict[int, dict | None] = {}     # id(card) → snapshot | None
         self._statuses: dict[int, str] = {}                # id(card) → warning text
         self._pending_after: dict[int, str | None] = {}    # id(card) → after-id | None
         self._used_color_indices: set[int] = set()
@@ -65,15 +79,23 @@ class MainWindow(ctk.CTk):
         # ── left column ───────────────────────────────────────────────────────
         self._left = ctk.CTkScrollableFrame(
             self,
-            label_text="  Products",
-            label_font=font(12, "bold"),
-            label_fg_color=BORDER,
+            label_text="",
+            label_fg_color=BG,
             fg_color=BG,
             scrollbar_button_color=BORDER,
             scrollbar_button_hover_color=ACCENT,
         )
         self._left.grid(row=0, column=0, sticky="nsew", padx=(12, 6), pady=12)
 
+        # Shared category panel — above all product cards
+        self._shared_cat_panel = CategoryPanel(
+            self._left,
+            categories=self.adapter.categories,
+            on_change=self._on_shared_category_change,
+        )
+        self._shared_cat_panel.pack(fill="x", pady=(0, 10))
+
+        # Add-product button (packed last; cards are inserted before it)
         self._add_btn = ctk.CTkButton(
             self._left,
             text="+ Add product",
@@ -93,13 +115,27 @@ class MainWindow(ctk.CTk):
         self._right_container.grid_rowconfigure(0, weight=1)
         self._right_container.grid_columnconfigure(0, weight=1)
 
-        # ── initial product (permanent, cannot be removed) ─────────────────────
+        # ── initial product (permanent, cannot be removed) ────────────────────
         card1 = self._create_card(removable=False)
         card1.pack(fill="x", pady=(0, 8))
         self._add_btn.pack(fill="x", pady=(0, 4))
 
         self._rebuild_right_panel()
         self._schedule_predict(card1)
+
+    # ── shared category ───────────────────────────────────────────────────────
+
+    def _on_shared_category_change(self, category: Optional[str]) -> None:
+        self._shared_category = category
+        for card in self._cards:
+            card.apply_shared_category(category)
+            if not card.has_category_override():
+                self._schedule_predict(card)
+
+    def _effective_category(self, card: ProductCard) -> Optional[str]:
+        if card.has_category_override():
+            return card.local_category()
+        return self._shared_category
 
     # ── card creation / removal ───────────────────────────────────────────────
 
@@ -119,7 +155,6 @@ class MainWindow(ctk.CTk):
             color=PRODUCT_COLORS[color_idx],
             on_change=self._on_card_change,
             on_remove=self._on_card_remove if removable else None,
-            start_expanded=(n == 1),
             default_name=f"Product {n}",
         )
         self._cards.append(card)
@@ -134,6 +169,7 @@ class MainWindow(ctk.CTk):
             return
         self._add_btn.pack_forget()
         card = self._create_card(removable=True)
+        card.apply_shared_category(self._shared_category)
         card.pack(fill="x", pady=(0, 8))
         self._add_btn.pack(fill="x", pady=(0, 4))
         self._add_btn.configure(
@@ -183,26 +219,28 @@ class MainWindow(ctk.CTk):
 
         if len(self._cards) == 1:
             card = self._cards[0]
-            pred = self._predictions.get(id(card))
+            snap = self._predictions.get(id(card))
             status = self._statuses.get(id(card), "")
-            if pred is None:
+            if snap is None:
                 self._active_right_panel.clear_prediction()
                 self._active_right_panel.set_status(status)
             else:
-                value, bounds = pred
-                self._active_right_panel.set_prediction(value, bounds)
+                self._active_right_panel.set_prediction(snap["value"], snap["bounds"])
                 self._active_right_panel.set_status(status)
         else:
             results: List[ProductResult] = []
             for card in self._cards:
-                pred = self._predictions.get(id(card))
-                if pred is not None:
-                    value, bounds = pred
+                snap = self._predictions.get(id(card))
+                if snap is not None:
                     results.append(ProductResult(
                         name=card.name(),
-                        value=value,
-                        bounds=bounds,
+                        value=snap["value"],
+                        bounds=snap["bounds"],
                         color=card.color,
+                        category=snap["category"],
+                        materials=snap["materials"],
+                        eol=snap["eol"],
+                        origin_pct=snap["origin_pct"],
                     ))
             self._active_right_panel.update(results)
 
@@ -225,7 +263,7 @@ class MainWindow(ctk.CTk):
     def _predict_now(self, card: ProductCard) -> None:
         self._pending_after[id(card)] = None
 
-        category   = card.category()
+        category   = self._effective_category(card)
         materials  = card.materials()
         eol_shares = card.eol_shares()
         origin_pct = card.origin_pct()
@@ -272,7 +310,24 @@ class MainWindow(ctk.CTk):
             return
 
         bounds = self.adapter.prediction_range(value, category)
-        self._predictions[id(card)] = (value, bounds)
+
+        # Normalised materials for display (what the model actually used)
+        if mat_total > 0:
+            norm_materials = [
+                {"name": m["name"], "percentage": m["percentage"] / mat_total * 100.0}
+                for m in materials
+            ]
+        else:
+            norm_materials = list(materials)
+
+        self._predictions[id(card)] = {
+            "value":      value,
+            "bounds":     bounds,
+            "category":   category,
+            "materials":  norm_materials,
+            "eol":        eol_for_pred,
+            "origin_pct": origin_pct,
+        }
         self._statuses[id(card)] = "\n".join(status_parts)
         self._push_all_predictions()
 
