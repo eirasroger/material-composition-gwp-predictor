@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+import textwrap
 import tkinter as tk
 
 import customtkinter as ctk
@@ -38,20 +39,35 @@ class ProductResult:
 
 
 # ── layout constants ──────────────────────────────────────────────────────────
-_FIG_W       = 5.6    # figure width in inches
-_DPI         = 100
-_BAR_H       = 4.0    # bar chart subplot height in inches
-_ROW_H       = 0.26   # height per summary row in inches
-_LABEL_W     = 1.3    # x-units reserved for the label column (negative x side)
-_LEFT_MARGIN = 0.10   # figure left margin fraction (space for y-axis label)
-_RIGHT_MARGIN= 0.97   # figure right margin fraction
+_FIG_W        = 5.6    # figure width in inches
+_DPI          = 100
+_BAR_H        = 8.0    # bar chart subplot height in inches
+_ROW_H        = 0.26   # height per summary row in inches
+_LABEL_W      = 1.3    # x-units reserved for the label column (negative x side)
+_LEFT_MARGIN  = 0.10   # figure left margin fraction (space for y-axis label)
+_RIGHT_MARGIN = 0.97   # figure right margin fraction
+_CHAR_WIDTH_IN = 0.00425
+
+
+# ── cell helpers ──────────────────────────────────────────────────────────────
+
+def _truncate_cell(text: str, n_prod: int, fontsize: int = 11) -> str:
+    """Truncate *text* so it fits within one column of the summary table.
+
+    The column width is derived from the figure dimensions and the number of
+    products.  A trailing ellipsis replaces any characters that would overflow.
+    """
+    col_w_inches = (_FIG_W - _LABEL_W) / max(n_prod, 1)
+    limit = max(6, int(col_w_inches / (fontsize * _CHAR_WIDTH_IN)))
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"
 
 
 class ComparisonPanel(ctk.CTkFrame):
     def __init__(self, master) -> None:
         super().__init__(master, fg_color="transparent")
 
-        # Scrollable container so tall summary tables don't get clipped
         self._scroll = ctk.CTkScrollableFrame(
             self,
             fg_color=SURFACE,
@@ -118,7 +134,6 @@ class ComparisonPanel(ctk.CTkFrame):
         raw_max = max(uppers) if uppers else max(p.value for p in products)
         y_max   = max(raw_max * 1.20, 1.0)
 
-        # Small zone below y=0 for product name labels
         label_zone = y_max * 0.07
 
         for i, p in enumerate(products):
@@ -149,7 +164,6 @@ class ComparisonPanel(ctk.CTkFrame):
                 color=p.color, fontsize=10.5, fontweight="bold",
             )
 
-        # Separator line at y=0 (visual x-axis between bars and names)
         ax.axhline(0, color=BORDER, linewidth=1.0, zorder=1)
 
         ax.set_xlim(x_left, x_right)
@@ -173,7 +187,6 @@ class ComparisonPanel(ctk.CTkFrame):
         ax.set_xlim(x_left, x_right)
 
         n_rows = len(rows)
-        # y=0 at top, y=-(n_rows-1) at bottom
         ax.set_ylim(-n_rows - 0.2, 0.8)
 
         label_x = x_left + 0.08
@@ -189,9 +202,8 @@ class ComparisonPanel(ctk.CTkFrame):
                 ax.text(
                     label_x, y, row["label"],
                     ha="left", va="center",
-                    color=TEXT_SEC, fontsize=10.5, fontweight="bold",
+                    color=TEXT_SEC, fontsize=12, fontweight="bold",
                 )
-                # horizontal rule spanning the full axis width
                 ax.axhline(
                     y - 0.45,
                     xmin=0.0, xmax=1.0,
@@ -201,26 +213,27 @@ class ComparisonPanel(ctk.CTkFrame):
                 ax.text(
                     label_x + 0.12, y, row["label"],
                     ha="left", va="center",
-                    color=TEXT_DIM, fontsize=10,
+                    color=TEXT_DIM, fontsize=11,
                 )
                 for i, val in enumerate(row["values"]):
                     if val is None:
                         ax.text(
                             i, y, "—",
                             ha="center", va="center",
-                            color=TEXT_DIM, fontsize=10,
+                            color=TEXT_DIM, fontsize=11,
                         )
                     else:
                         ax.text(
                             i, y, val,
                             ha="center", va="center",
-                            color=TEXT_SEC, fontsize=10,
+                            color=TEXT_SEC, fontsize=11,
                         )
 
     # ── row builder ───────────────────────────────────────────────────────────
 
     def _build_rows(self, products: List[ProductResult]) -> List[dict]:
         rows: List[dict] = []
+        n_prod = len(products)
 
         # Materials
         rows.append({"type": "section", "label": "Materials"})
@@ -282,7 +295,7 @@ class ComparisonPanel(ctk.CTkFrame):
             rows.append({
                 "type": "data",
                 "label": "c-PCR",
-                "values": [p.category for p in products],
+                "values": [_truncate_cell(p.category, n_prod) for p in products],
             })
 
         return rows
