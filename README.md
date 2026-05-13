@@ -1,53 +1,119 @@
 # material-composition-gwp-predictor
-Deep learning model to predict Global Warming Potential (GWP) of construction products from material composition. Materials are vectorised using embeddings and weighted by their proportions to form product-level representations, combined with product category features for accurate environmental impact prediction.
 
-## Input features
-- Material composition: name, percentage -> embedding (300 dimensions)
-- Product category (one-hot encoded). Probably c-PCR based
-- Circularity (5 dimensions: circular origin, future use recycling, future use inert landfilling, future use incineration, future use hazardous waste)
+Deep learning model to predict the Global Warming Potential (GWP) of construction products from material composition. Materials are vectorised using word embeddings and weighted by their mass fractions to form product-level representations, then combined with product category and circularity/end-of-life data for accurate environmental impact prediction.
 
-## Output feature
-- total ghg (1 dimension)
+This repository contains two main contributions:
+
+- **ML pipeline** — trains and evaluates GHGNet, the prediction model, on a labelled product dataset.
+- **Desktop application** — a standalone Windows GUI that wraps the trained model, letting users interactively explore predicted GHG footprints by adjusting material composition, product category, end-of-life shares, and circularity parameters in real time. Supports single-product prediction and side-by-side multi-product comparison.
+
+---
+
+## Model inputs and output
+
+| Feature | Description | Dimensionality |
+|---|---|---|
+| Material composition | Material names + mass fractions → fastText embeddings, mass-fraction-weighted average, L2-normalised | 300 |
+| Product category | c-PCR label → one-hot encoding | n_categories |
+| Circularity | Circular origin %, recycling %, inert landfill %, incineration %, hazardous waste % | 5 |
+
+**Output**: predicted total GHG footprint in **kg CO₂-eq per kg of product**.
+
+---
 
 ## Dataset
-- aprox 8800 construction products. Not all of them have specific c-PCR
 
-## Core process
-The model learns to map product composition to GWP using material embeddings weighted by their proportions, with product category added as a contextual signal to refine the prediction. When a specific PCR is available, that context is used to narrow the category representation; when it is not, the model falls back to a generic `N/A` context so inference can still proceed, albeit with less specificity.
+~8 800 labelled construction products. Each record contains material composition (name + percentage), a c-PCR product category, end-of-life breakdown, and a measured GHG footprint. Only products with `reference_unit == "kg"` are used in training. The dataset file is not included in this repository.
+
+---
 
 ## Project layout
+
 ```
 material-composition-gwp-predictor/
-├── main.py                      # entrypoint -> src.pipeline.run()
-├── requirements.txt
-└── src/
-    ├── config.py                # paths, hyperparameters, constants, seeds
-    ├── utils.py                 # safe_float, r2_safe, tokenisers, ...
-    ├── data/
-    │   ├── loader.py            # load + reference-unit filter + category index
-    │   ├── preprocessing.py     # per-product validation + circularity feats
-    │   └── features.py          # build feature matrix
-    ├── embeddings/
-    │   ├── vocab.py             # w2v / fastText / custom .vec loaders
-    │   └── encode.py            # material/product/category encoders
-    ├── model/
-    │   ├── dataset.py           # torch Dataset wrapper
-    │   └── network.py           # GHGNet MLP
-    ├── train/
-    │   ├── trainer.py           # training loop + early stopping
-    │   └── evaluator.py         # held-out + per-category eval
-    ├── reporting/
-    │   └── plots.py             # diagnostic plots + JSON dump
-    ├── inference/
-    │   └── predict.py           # single-product GHG prediction
-    └── pipeline.py              # end-to-end orchestration
+├── main.py                          training entrypoint  →  python main.py
+├── dataset.json                     labelled product dataset (not in git)
+├── ghg_model.pt                     trained checkpoint (produced by training)
+├── diagnostics_ghg.json             full run diagnostics
+├── figures/                         plots produced by training
+├── requirements.txt                 ML pipeline dependencies
+├── src/                             ML pipeline
+│   ├── config.py                    all hyperparams, paths, constants, seeds
+│   ├── utils.py                     helpers: safe_float, tokenise_material, normalise_shares_to_100
+│   ├── pipeline.py                  end-to-end orchestration (called by main.py)
+│   ├── data/
+│   │   ├── loader.py                load_dataset, reference-unit filter, category index
+│   │   ├── preprocessing.py         per-product validation and circularity feature extraction
+│   │   └── features.py              build_features → X matrix (embedding + one-hot + circularity)
+│   ├── embeddings/
+│   │   ├── vocab.py                 loads fastText / W2V / custom .vec backends, OOV reporting
+│   │   ├── encode.py                embed_material, product_embedding (L2-norm), category_onehot
+│   │   └── baked.py                 save/load vocab.npz (compressed token subset for desktop app)
+│   ├── model/
+│   │   ├── network.py               GHGNet — MLP with BatchNorm + ReLU + Dropout
+│   │   └── dataset.py               GHGDataset (PyTorch Dataset wrapper)
+│   ├── train/
+│   │   ├── trainer.py               train_model — AdamW + HuberLoss + early stopping
+│   │   └── evaluator.py             evaluate_model, per-category metrics, worst-prediction report
+│   ├── inference/
+│   │   └── predict.py               load_model → LoadedModel; predict_ghg_with_loaded; predict_ghg
+│   └── reporting/
+│       └── plots.py                 training curves, scatter plot, residuals, diagnostics JSON
+├── desktop_app/                     Windows desktop GUI  (see desktop_app/README.md)
+│   ├── app.py                       entrypoint  →  python -m desktop_app.app
+│   ├── inference_adapter.py         wraps model + vocab; single-call predict API for the UI
+│   ├── updater.py                   auto-update: checks GitHub Releases, downloads installer
+│   ├── splash.py                    loading screen shown while the model initialises
+│   ├── _version.py                  app version string
+│   ├── ui/
+│   │   ├── main_window.py           2-column layout: product inputs left, results right
+│   │   ├── category_panel.py        searchable c-PCR dropdown (frequency-ordered)
+│   │   ├── product_card.py          collapsible per-product input card (comparison mode)
+│   │   ├── materials_panel.py       dynamic material rows + autoscale to 100 %
+│   │   ├── eol_panel.py             4 end-of-life sliders + autoscale to 100 %
+│   │   ├── origin_panel.py          circular-origin % slider
+│   │   ├── prediction_panel.py      large GHG readout + matplotlib gauge (single-product)
+│   │   ├── comparison_panel.py      bar chart + summary table (2–4 products)
+│   │   ├── widgets.py               SearchableDropdown, PercentSlider, SumIndicator
+│   │   └── theme.py                 colour constants and theme helpers
+│   ├── tools/
+│   │   └── bake_assets.py           produces runtime assets from repo root model + dataset
+│   ├── assets/                      runtime assets (not in git; produced by bake_assets.py)
+│   └── build/
+│       ├── ghg_predictor.spec       PyInstaller one-folder spec
+│       ├── installer.iss            Inno Setup script (per-user, %LOCALAPPDATA%, no admin)
+│       └── build.ps1                full build pipeline: bake → PyInstaller → Inno Setup
+├── wiki-news-300d-1M/               fastText vectors (~1 GB, not in git, auto-downloaded)
+├── GoogleNews-vectors-negative300/  W2V binary (optional alternative backend, not in git)
+└── docs/
+    ├── OVERVIEW.md                  complete technical reference
+    └── LEARNINGS.md                 development diary
 ```
 
-## Setup
+---
+
+## Model architecture
+
+**GHGNet** — a 3-layer MLP trained on standardised log1p-transformed targets:
+
+```
+Linear(input_dim, 256) → BatchNorm1d → ReLU → Dropout(0.2)
+Linear(256, 128)        → BatchNorm1d → ReLU → Dropout(0.2)
+Linear(128, 1)          → scalar output (standardised log1p GHG)
+```
+
+Inverse-transformed at inference: `expm1(pred * y_scale + y_mean)`.
+
+Training details: AdamW (lr = 1e-3, weight_decay = 1e-4), HuberLoss (delta = 1.0), ReduceLROnPlateau, gradient clipping (max_norm = 1.0), early stopping (patience = 30, max 200 epochs, batch size 64). Full hyperparameter table in `src/config.py`.
+
+---
+
+## Setup (ML pipeline)
 
 Requires Python 3.10+.
 
 ### Windows (PowerShell)
+
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -56,6 +122,7 @@ pip install -r requirements.txt
 ```
 
 ### Windows (cmd)
+
 ```cmd
 python -m venv .venv
 .venv\Scripts\activate
@@ -64,47 +131,64 @@ pip install -r requirements.txt
 ```
 
 ### macOS / Linux
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install --upgrade pip
+pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-## Running
+---
 
-Place the dataset as `dataset.json` at the repository root (the path is configurable in `src/config.py`).
+## Running the ML pipeline
 
-With the venv activated:
+Place the dataset as `dataset.json` at the repository root (path is configurable in `src/config.py`).
+
+With the virtual environment active:
+
 ```bash
 python main.py
 ```
 
-Or without activating the venv (Windows):
-```powershell
-.\.venv\Scripts\python.exe main.py
-```
-
-The first run will download the fastText vectors (~1 GB extracted) into `wiki-news-300d-1M/` unless `EMBEDDING_BACKEND` in `src/config.py` is changed to `"google_news"` or `"custom_vec"`.
+The first run downloads the fastText vectors (~1 GB extracted) into `wiki-news-300d-1M/`. To use a different embedding backend, set `EMBEDDING_BACKEND` in `src/config.py` to `"google_news"` or `"custom_vec"`.
 
 ### Outputs
+
 After a run, the following files are written to the repo root:
-- `ghg_model.pt` — trained checkpoint (state dict + scaler params + `cat_index`)
-- `diagnostics_ghg.json` — full metrics dump (train history + per-category test metrics)
-- `training_curves_ghg.png`, `pred_vs_actual_ghg.png`, `residuals_ghg.png` — plots
+
+| File | Contents |
+|---|---|
+| `ghg_model.pt` | Trained checkpoint (model weights + scaler params + category index) |
+| `diagnostics_ghg.json` | Full metrics dump (training history + per-category test breakdown) |
+| `figures/` | Training curves, predicted-vs-actual scatter, residual plot |
 
 ### Configuration
-All paths and hyperparameters live in `src/config.py` (`EMBED_DIM`, `HIDDEN_DIMS`, `LR`, `EPOCHS`, `BATCH_SIZE`, `GHG_MIN`/`GHG_MAX`, `MIN_CATEGORY_COUNT`, embedding backend, etc.).
 
-## Desktop app
+All paths and hyperparameters live in `src/config.py` (`EMBED_DIM`, `HIDDEN_DIMS`, `LR`, `EPOCHS`, `BATCH_SIZE`, `GHG_MIN`/`GHG_MAX`, `MIN_CATEGORY_COUNT`, embedding backend, etc.). Never hardcode these values elsewhere.
 
-A standalone Windows desktop app wraps the trained model in a clickable GUI: pick a product category, edit material composition (sliders + searchable material names), end-of-life shares, and circular-origin %, and watch the predicted GHG update live.
+---
 
-- **Users**: download `GHGPredictorSetup-<version>.exe` from the [Releases page](https://github.com/eirasroger/material-composition-gwp-predictor/releases), run it (no admin rights, no Python needed), launch from Start Menu.
-- **Developers**: see [`desktop_app/README.md`](desktop_app/README.md) for build steps. The app lives entirely under `desktop_app/` and reuses the same training/inference code from `src/`.
+## Desktop application
 
-The application automatically checks for updates on startup and prompts users to install any available new versions.
+The desktop application is a primary contribution of this repository. It packages the trained model into a standalone Windows installer — no Python, no configuration, no admin rights required — and provides a graphical interface for real-time GHG prediction and product comparison.
+
+### For end users
+
+Download `GHGPredictorSetup-<version>.exe` from the [Releases page](https://github.com/eirasroger/material-composition-gwp-predictor/releases), run it, and launch **GHG Predictor** from the Start Menu. The app checks for and installs updates automatically on each startup.
+
+### Key features
+
+- **Single-product prediction** — select a product category, define material components by name and mass fraction, set end-of-life shares (recycling, landfill, incineration, hazardous) and circular origin %, and read the predicted GHG footprint live. All percentage inputs autoscale to 100 % on demand.
+- **Multi-product comparison** — configure 2–4 products side by side. The right panel switches to a bar chart and summary table comparing all products' predicted footprints.
+- **Per-product category override** — in comparison mode, each product card can use its own category rather than the shared one.
+- **Frequency-ordered material and category dropdowns** — the most common materials and categories from the training dataset appear first, reducing scrolling for typical use cases.
+- **Live updates** — predictions recalculate within ~250 ms of any input change.
+
+For developer setup, build instructions, and the full release workflow, see [`desktop_app/README.md`](desktop_app/README.md).
+
+---
 
 ## Contact
 
-Roger Vergés - Lead developer - [roger.verges.eiras@upc.edu](mailto:roger.verges.eiras@upc.edu)<a href="https://orcid.org/0009-0001-5887-4785" aria-label="ORCID"><img src="https://orcid.org/sites/default/files/images/orcid_16x16.png" alt="ORCID iD" width="16" height="16" style="vertical-align: text-bottom; margin-left: 4px;"></a>
+Roger Vergés — Lead developer — [roger.verges.eiras@upc.edu](mailto:roger.verges.eiras@upc.edu)<a href="https://orcid.org/0009-0001-5887-4785" aria-label="ORCID"><img src="https://orcid.org/sites/default/files/images/orcid_16x16.png" alt="ORCID iD" width="16" height="16" style="vertical-align: text-bottom; margin-left: 4px;"></a>
