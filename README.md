@@ -23,7 +23,64 @@ This repository contains two main contributions:
 
 ## Dataset
 
-~8 800 labelled construction products. Each record contains material composition (name + percentage), a c-PCR product category, end-of-life breakdown, and a measured GHG footprint. Only products with `reference_unit == "kg"` are used in training. The dataset file is not included in this repository.
+~8 800 labelled construction products. Each record contains material composition (name + percentage), a c-PCR product category, end-of-life breakdown, and a measured GHG footprint. The dataset file is not included in this repository due to confidentiality, but the expected format is documented below so that compatible datasets can be prepared.
+
+### Format
+
+`dataset.json` must be a JSON array of product objects. The following annotated example shows every field the pipeline reads:
+
+```jsonc
+[
+  {
+    // ── Required ───────────────────────────────────────────────────────────────
+    "reference_unit": "kg",          // must be exactly "kg"; other units are dropped
+
+    "c_pcr": "Textiles",             // product category (string); categories with fewer
+                                     // than MIN_CATEGORY_COUNT products are excluded
+                                     // (default threshold: 20)
+
+    "product_integrity": {
+      "materials": [
+        { "name": "cotton",    "percentage": 80 },   // material name + mass fraction
+        { "name": "polyester", "percentage": 20 }    // percentages need not sum to 100;
+      ]                                              // if all are 0 or missing, equal
+    },                                               // weights are assigned automatically
+
+    "ghg_footprint": {
+      "total_ghg": 3.14              // measured GHG footprint in kg CO₂-eq / kg product;
+    },                               // must be in [GHG_MIN, GHG_MAX] = [0.0, 10.0]
+
+    // ── Optional (default 0.0 if missing) ──────────────────────────────────────
+    "cyclability": {
+      "circularity_origin_percentage":          30,  // % of input material from circular sources
+
+      // End-of-life breakdown — five "future_use_*" keys that aggregate into a
+      // single "recycling" share (recycling + composting + valorisation + reconditioning + reuse),
+      // then normalised with hazardous, inert, and incineration to sum to 100 %:
+      "future_use_recycling":                   60,
+      "future_use_composting":                   0,
+      "future_use_valorisation / filling":       0,
+      "future_use_reconditioning":               0,
+      "future_use_reuse":                        0,
+      "future_use_hazardous waste":              0,
+      "future_use_inert and non-hazardous landfills": 20,
+      "future_use_incineration":                20
+    }
+  }
+  // ... more products
+]
+```
+
+**Filtering applied during training:**
+
+| Rule | Effect |
+|---|---|
+| `reference_unit != "kg"` | Product is dropped |
+| `c_pcr` category has fewer than `MIN_CATEGORY_COUNT` products (default 20) | Entire category is dropped |
+| `ghg_footprint.total_ghg` missing, non-numeric, or outside [0.0, 10.0] | Product is dropped |
+| `product_integrity.materials` empty or missing | Product is dropped |
+| All material percentages are 0 or missing | Equal mass fractions are assigned automatically |
+| Any `cyclability` field missing | Defaults to 0.0 (product is not dropped) |
 
 ---
 
