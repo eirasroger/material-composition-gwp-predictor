@@ -44,12 +44,12 @@ RESIDUALS_PATH     = FIGURES_DIR / "residuals_ghg.png"
 # ── Model hyperparameters ─────────────────────────────────────────────────────
 EMBED_DIM          = 300
 HIDDEN_DIMS        = [256, 128]
-DROPOUT            = 0.3
+DROPOUT            = 0.25
 WEIGHT_DECAY       = 3e-4
 LR                 = 1e-3
 EPOCHS             = 200
 BATCH_SIZE         = 64
-PATIENCE           = 30
+PATIENCE           = 20
 RANDOM_SEED        = 42
 SEEDS              = [42, 123, 456, 789, 2024]
 
@@ -58,7 +58,7 @@ TARGET_FIELD       = "total_ghg"
 GHG_MIN            = 0.0
 GHG_MAX            = 10.0
 
-MIN_CATEGORY_COUNT = 20
+MIN_CATEGORY_COUNT = 10
 
 # 1 circularity-origin + 4 end-of-life percentages
 N_CIRC_FEATURES    = 5
@@ -462,13 +462,16 @@ MATERIAL_VARIATIONS: Dict[str, str] = {
 
 }
 
-STOP_WORDS: Set[str] = {
+STOP_WORDS: set[str] = {
     "a", "an", "and", "are", "as", "at", "be", "been", "but", "by",
     "for", "from", "has", "have", "in", "is", "it", "its", "of",
     "on", "or", "that", "the", "their", "there", "they", "this",
     "to", "was", "were", "which", "with",
-}
 
+    "type", "grade", "class", "kind", "form", "series", "model", "product",
+    "item", "sample", "specification", "spec", "material", "component",
+    "part", "version", "variant", "lot", "batch", "range"
+}
 # Reproducibility: applied on import so any module that touches torch / numpy
 # downstream sees the same seeds as the original single-file script did.
 torch.manual_seed(RANDOM_SEED)
