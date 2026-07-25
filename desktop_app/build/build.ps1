@@ -59,9 +59,13 @@ Write-Host "==> Version:     $Version"
 # ── 1. Bake assets ───────────────────────────────────────────────────────────
 if ($SkipBake) {
     Write-Host "`n[1/3] Skipping bake_assets (--SkipBake)." -ForegroundColor Yellow
-    foreach ($f in "ghg_model.pt","vocab.npz","materials.json") {
+    foreach ($f in "targets_manifest.json","vocab.npz","materials.json") {
         $p = Join-Path "desktop_app\assets" $f
         if (-not (Test-Path $p)) { throw "Missing committed asset: $p" }
+    }
+    $modelsDir = "desktop_app\assets\models"
+    if (-not (Test-Path $modelsDir) -or -not (Get-ChildItem $modelsDir -Filter "*.pt" -ErrorAction SilentlyContinue)) {
+        throw "No checkpoints in $modelsDir. Run bake_assets.py (or drop -SkipBake) first."
     }
 } else {
     Write-Host "`n[1/3] Baking assets ..." -ForegroundColor Cyan
