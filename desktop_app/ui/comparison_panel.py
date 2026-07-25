@@ -26,7 +26,7 @@ from matplotlib.figure import Figure  # noqa: E402
 
 from desktop_app.ui.theme import (
     ACCENT, BORDER, BG, SURFACE, TEXT_DIM, TEXT_PRI, TEXT_SEC, font,
-    stage_sort_key,
+    fmt_value as _fmt, stage_label, stage_sort_key,
 )
 
 
@@ -70,8 +70,9 @@ def _truncate_cell(text: str, n_prod: int, fontsize: int = 11) -> str:
 
 
 class ComparisonPanel(ctk.CTkFrame):
-    def __init__(self, master) -> None:
+    def __init__(self, master, unit: str = "kg CO2-eq/kg") -> None:
         super().__init__(master, fg_color="transparent")
+        self._unit = unit
 
         self._scroll = ctk.CTkScrollableFrame(
             self,
@@ -138,6 +139,10 @@ class ComparisonPanel(ctk.CTkFrame):
         self._show_empty()
 
     # ── public ───────────────────────────────────────────────────────────────
+
+    def set_unit(self, unit: str) -> None:
+        """Re-point at another indicator; caller follows with update()."""
+        self._unit = unit
 
     def update(self, products: List[ProductResult]) -> None:
         self._products = list(products)
@@ -209,7 +214,7 @@ class ComparisonPanel(ctk.CTkFrame):
                 )
             ann_y = (p.bounds[1] if p.bounds else p.value) + y_max * 0.025
             ax.text(
-                i, ann_y, f"{p.value:.3f}",
+                i, ann_y, _fmt(p.value),
                 ha="center", va="bottom",
                 color=p.color, fontsize=10, fontweight="bold",
             )
@@ -226,7 +231,7 @@ class ComparisonPanel(ctk.CTkFrame):
         ax.set_xlim(x_left, x_right)
         ax.set_ylim(-label_zone, y_max)
         ax.set_xticks([])
-        ax.set_ylabel("kg CO₂eq / kg", color=TEXT_SEC, fontsize=10, labelpad=4)
+        ax.set_ylabel(self._unit, color=TEXT_SEC, fontsize=10, labelpad=4)
         ax.tick_params(axis="y", colors=TEXT_SEC, labelsize=10)
         ax.set_facecolor(SURFACE)
         for spine in ("top", "right", "bottom"):
@@ -384,7 +389,7 @@ class ComparisonPanel(ctk.CTkFrame):
         for p in products:
             for s in p.breakdown:
                 if s["stage_key"] not in stage_labels:
-                    stage_labels[s["stage_key"]] = s["display_name"].replace("GHG ", "")
+                    stage_labels[s["stage_key"]] = stage_label(s["stage_key"])
                     stage_keys.append(s["stage_key"])
         stage_keys.sort(key=stage_sort_key)
         n_stages = len(stage_keys)
@@ -429,7 +434,7 @@ class ComparisonPanel(ctk.CTkFrame):
                 )
                 label_y = v + err_hi + pad if v >= 0 else v - err_lo - pad
                 ax.text(
-                    x, label_y, f"{v:.2f}", ha="center",
+                    x, label_y, _fmt(v), ha="center",
                     va="bottom" if v >= 0 else "top",
                     color=TEXT_PRI, fontsize=7,
                 )
@@ -437,8 +442,7 @@ class ComparisonPanel(ctk.CTkFrame):
         ax.axhline(0, color=BORDER, linewidth=1, zorder=1)
         ax.set_xticks(range(n_stages))
         ax.set_xticklabels([stage_labels[sk] for sk in stage_keys], color=TEXT_SEC, fontsize=9)
-        unit = products[0].breakdown[0].get("unit", "") if products[0].breakdown else ""
-        ax.set_ylabel(unit, color=TEXT_SEC, fontsize=8, labelpad=4)
+        ax.set_ylabel(self._unit, color=TEXT_SEC, fontsize=8, labelpad=4)
         ax.tick_params(colors=TEXT_SEC, labelsize=8, length=3)
         ax.set_facecolor(SURFACE)
         for spine in ("top", "right"):

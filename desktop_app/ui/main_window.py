@@ -6,9 +6,13 @@ Left column
   ├── ProductCard 1 … 4  (collapsible; each can override category)
   └── "+ Add product" button
 
-Right column
-  Single product → PredictionPanel (unchanged single-product view)
-  2+ products    → ComparisonPanel (bar chart + aligned summary table)
+Right column — an indicator selector above one of three panels:
+  Summary            → SummaryPanel  (radar of every indicator's total)
+  indicator, 1 card  → PredictionPanel
+  indicator, 2+ cards→ ComparisonPanel
+
+Every card predicts every target on each edit (25 forward passes ~5 ms, so the
+selector only chooses what to *display* — it never triggers re-prediction).
 """
 
 from __future__ import annotations
@@ -24,14 +28,20 @@ from desktop_app.ui.category_panel import CategoryPanel
 from desktop_app.ui.comparison_panel import ComparisonPanel, ProductResult
 from desktop_app.ui.prediction_panel import PredictionPanel
 from desktop_app.ui.product_card import ProductCard
+from desktop_app.ui.summary_panel import IndicatorReading, SummaryPanel, SummaryProduct
 from desktop_app.ui.theme import (
-    ACCENT, BG, BORDER, MAX_PRODUCTS, PRODUCT_COLORS, SURFACE, TEXT_SEC, font,
+    ACCENT, BG, BORDER, MAX_PRODUCTS, PRODUCT_COLORS, SURFACE, SURFACE_HI,
+    TEXT_PRI, TEXT_SEC, font, indicator_label, indicator_sort_key,
 )
 from desktop_app._version import __version__
 from src.utils import normalise_shares_to_100
 
 
 DEBOUNCE_MS = 150
+
+# Selector entry for the all-indicator radar. Not an indicator_key, so it can
+# never collide with one from the manifest.
+SUMMARY_VIEW = "Summary — all indicators"
 
 
 def _icon_path() -> Path:
@@ -62,6 +72,23 @@ class MainWindow(ctk.CTk):
 
         # shared category state
         self._shared_category: Optional[str] = None
+
+        # ── indicator selector state ──────────────────────────────────────────
+        # One entry per indicator that actually has a "total" target baked, in
+        # the canonical display order; unknown indicators sort last rather than
+        # being dropped.
+        self._indicator_keys = sorted(
+            (k for k in self.adapter.indicator_keys()
+             if self.adapter.target_for(k, "total") is not None),
+            key=indicator_sort_key,
+        )
+        self._view_options = [SUMMARY_VIEW] + [
+            indicator_label(k) for k in self._indicator_keys
+        ]
+        self._label_to_indicator = {
+            indicator_label(k): k for k in self._indicator_keys
+        }
+        self._current_view = SUMMARY_VIEW
 
         # per-card state
         self._cards: list[ProductCard] = []
@@ -113,8 +140,31 @@ class MainWindow(ctk.CTk):
         # ── right column ──────────────────────────────────────────────────────
         self._right_container = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=10)
         self._right_container.grid(row=0, column=1, sticky="nsew", padx=(6, 12), pady=12)
-        self._right_container.grid_rowconfigure(0, weight=1)
+        self._right_container.grid_rowconfigure(1, weight=1)
         self._right_container.grid_columnconfigure(0, weight=1)
+
+        selector_bar = ctk.CTkFrame(self._right_container, fg_color="transparent")
+        selector_bar.grid(row=0, column=0, sticky="ew", padx=20, pady=(16, 0))
+        ctk.CTkLabel(
+            selector_bar, text="Showing", font=font(12), text_color=TEXT_SEC,
+        ).pack(side="left", padx=(0, 10))
+        self._view_menu = ctk.CTkOptionMenu(
+            selector_bar,
+            values=self._view_options,
+            command=self._on_view_change,
+            font=font(12),
+            dropdown_font=font(12),
+            fg_color=SURFACE_HI,
+            button_color=SURFACE_HI,
+            button_hover_color=BORDER,
+            text_color=TEXT_PRI,
+            dropdown_fg_color=SURFACE_HI,
+            dropdown_text_color=TEXT_PRI,
+            dropdown_hover_color=BORDER,
+            width=210,
+        )
+        self._view_menu.set(self._current_view)
+        self._view_menu.pack(side="left")
 
         # ── initial product (permanent, cannot be removed) ────────────────────
         card1 = self._create_card(removable=False)
@@ -199,6 +249,32 @@ class MainWindow(ctk.CTk):
         self._rebuild_right_panel()
         self._push_all_predictions()
 
+    # ── indicator selector ────────────────────────────────────────────────────
+
+    def _on_view_change(self, choice: str) -> None:
+        if choice == self._current_view:
+            return
+        self._current_view = choice
+        self._rebuild_right_panel()
+        self._push_all_predictions()
+
+    @property
+    def _summary_view(self) -> bool:
+        return self._current_view == SUMMARY_VIEW
+
+    @property
+    def _current_indicator(self) -> str:
+        """Indicator key backing the current view (the default when on Summary)."""
+        return self._label_to_indicator.get(
+            self._current_view, self.adapter.default_indicator_key
+        )
+
+    def _current_target_key(self) -> str:
+        return (
+            self.adapter.target_for(self._current_indicator, "total")
+            or self.adapter.default_target_key
+        )
+
     # ── right panel management ────────────────────────────────────────────────
 
     def _rebuild_right_panel(self) -> None:
@@ -206,47 +282,146 @@ class MainWindow(ctk.CTk):
             self._active_right_panel.destroy()
             self._active_right_panel = None
 
-        if len(self._cards) <= 1:
-            panel = PredictionPanel(self._right_container, color=PRODUCT_COLORS[0])
+        if self._summary_view:
+            panel = SummaryPanel(self._right_container)
+        elif len(self._cards) <= 1:
+            entry = self.adapter.manifest[self._current_target_key()]
+            loaded = self.adapter.loaded[self._current_target_key()]
+            panel = PredictionPanel(
+                self._right_container,
+                color=PRODUCT_COLORS[0],
+                display_name=entry["display_name"],
+                unit=entry["unit"],
+                value_min=loaded.value_min,
+                value_max=loaded.value_max,
+            )
         else:
-            panel = ComparisonPanel(self._right_container)
+            panel = ComparisonPanel(
+                self._right_container,
+                unit=self.adapter.manifest[self._current_target_key()]["unit"],
+            )
 
-        panel.grid(row=0, column=0, sticky="nsew")
+        panel.grid(row=1, column=0, sticky="nsew")
         self._active_right_panel = panel
 
     def _push_all_predictions(self) -> None:
         if self._active_right_panel is None or not self._cards:
             return
 
-        if len(self._cards) == 1:
-            card = self._cards[0]
-            snap = self._predictions.get(id(card))
-            status = self._statuses.get(id(card), "")
-            if snap is None:
-                self._active_right_panel.clear_prediction()
-                self._active_right_panel.set_status(status)
-            else:
-                self._active_right_panel.set_prediction(
-                    snap["value"], snap["bounds"], breakdown=snap.get("breakdown")
-                )
-                self._active_right_panel.set_status(status)
+        if self._summary_view:
+            self._push_summary()
+        elif len(self._cards) == 1:
+            self._push_single()
         else:
-            results: List[ProductResult] = []
-            for card in self._cards:
-                snap = self._predictions.get(id(card))
-                if snap is not None:
-                    results.append(ProductResult(
-                        name=card.name(),
-                        value=snap["value"],
-                        bounds=snap["bounds"],
-                        color=card.color,
-                        category=snap["category"],
-                        materials=snap["materials"],
-                        eol=snap["eol"],
-                        origin_pct=snap["origin_pct"],
-                        breakdown=snap.get("breakdown"),
-                    ))
-            self._active_right_panel.update(results)
+            self._push_comparison()
+
+    def _push_summary(self) -> None:
+        products: List[SummaryProduct] = []
+        for card in self._cards:
+            snap = self._predictions.get(id(card))
+            if snap is None:
+                continue
+            readings: List[IndicatorReading] = []
+            for indicator in self._indicator_keys:
+                target_key = self.adapter.target_for(indicator, "total")
+                if target_key is None or target_key not in snap["all_preds"]:
+                    continue
+                entry = self.adapter.manifest[target_key]
+                readings.append(IndicatorReading(
+                    indicator_key=indicator,
+                    value=snap["all_preds"][target_key],
+                    unit=entry["unit"],
+                    display_name=entry["display_name"],
+                    ref=self.adapter.reference(snap["category"], target_key=target_key),
+                ))
+            if readings:
+                products.append(SummaryProduct(
+                    name=card.name(),
+                    color=card.color,
+                    category=snap["category"],
+                    readings=readings,
+                ))
+        self._active_right_panel.update(products)
+        self._active_right_panel.set_status(self._combined_status())
+
+    def _push_single(self) -> None:
+        card   = self._cards[0]
+        snap   = self._predictions.get(id(card))
+        status = self._statuses.get(id(card), "")
+        panel  = self._active_right_panel
+
+        if snap is None:
+            panel.clear_prediction()
+            panel.set_status(status)
+            return
+
+        target_key = self._current_target_key()
+        value      = snap["all_preds"].get(target_key)
+        if value is None:
+            panel.clear_prediction()
+            panel.set_status(status)
+            return
+
+        panel.set_prediction(
+            value,
+            self.adapter.prediction_range(value, snap["category"], target_key=target_key),
+            breakdown=self._breakdown_for(snap, self._current_indicator),
+            reference=self.adapter.reference(snap["category"], target_key=target_key),
+        )
+        panel.set_status(status)
+
+    def _push_comparison(self) -> None:
+        target_key = self._current_target_key()
+        results: List[ProductResult] = []
+        for card in self._cards:
+            snap = self._predictions.get(id(card))
+            if snap is None:
+                continue
+            value = snap["all_preds"].get(target_key)
+            if value is None:
+                continue
+            results.append(ProductResult(
+                name=card.name(),
+                value=value,
+                bounds=self.adapter.prediction_range(
+                    value, snap["category"], target_key=target_key
+                ),
+                color=card.color,
+                category=snap["category"],
+                materials=snap["materials"],
+                eol=snap["eol"],
+                origin_pct=snap["origin_pct"],
+                breakdown=self._breakdown_for(snap, self._current_indicator),
+            ))
+        self._active_right_panel.update(results)
+
+    def _breakdown_for(self, snap: dict, indicator_key: str) -> List[dict]:
+        """Per-stage values of one indicator, for the collapsible breakdown chart."""
+        out: List[dict] = []
+        for stage_key, target_key in self.adapter.stage_target_keys(indicator_key).items():
+            value = snap["all_preds"].get(target_key)
+            if value is None:
+                continue
+            entry = self.adapter.manifest[target_key]
+            out.append({
+                "stage_key":    stage_key,
+                "display_name": entry["display_name"],
+                "unit":         entry["unit"],
+                "value":        value,
+                "bounds":       self.adapter.prediction_range(
+                    value, snap["category"], target_key=target_key
+                ),
+            })
+        return out
+
+    def _combined_status(self) -> str:
+        """One status line for panels that show several cards at once."""
+        parts = []
+        for card in self._cards:
+            text = self._statuses.get(id(card), "")
+            if text:
+                parts.append(f"{card.name()}: {text}" if len(self._cards) > 1 else text)
+        return "\n".join(parts)
 
     # ── prediction wiring ─────────────────────────────────────────────────────
 
@@ -313,23 +488,6 @@ class MainWindow(ctk.CTk):
             self._push_all_predictions()
             return
 
-        value  = all_preds[self.adapter.default_target_key]
-        bounds = self.adapter.prediction_range(value, category)
-
-        breakdown: List[dict] = []
-        for stage_key, target_key in self.adapter.stage_target_keys().items():
-            stage_value = all_preds.get(target_key)
-            if stage_value is None:
-                continue
-            manifest_entry = self.adapter.manifest[target_key]
-            breakdown.append({
-                "stage_key":    stage_key,
-                "display_name": manifest_entry["display_name"],
-                "unit":         manifest_entry["unit"],
-                "value":        stage_value,
-                "bounds":       self.adapter.prediction_range(stage_value, category, target_key=target_key),
-            })
-
         # Normalised materials for display (what the model actually used)
         if mat_total > 0:
             norm_materials = [
@@ -339,10 +497,10 @@ class MainWindow(ctk.CTk):
         else:
             norm_materials = list(materials)
 
+        # Every target is stored, not just the displayed one: switching the
+        # indicator selector is then a pure redraw with no re-prediction.
         self._predictions[id(card)] = {
-            "value":      value,
-            "bounds":     bounds,
-            "breakdown":  breakdown,
+            "all_preds":  all_preds,
             "category":   category,
             "materials":  norm_materials,
             "eol":        eol_for_pred,

@@ -34,6 +34,27 @@ DEFAULT_TARGET_KEY = "ghg_total"
 STD_CATEGORY_PREFIX = "Other: "
 
 
+@dataclass
+class Reference:
+    """
+    The real-product distribution a prediction is reported against.
+
+    ``scope`` is "category" when the product's own category had enough labelled
+    samples to be its own yardstick, else "global". The UI must show which --
+    "vs. 689 concretes" and "vs. all 7,901 products" are very different claims.
+    """
+    p25: float
+    p50: float
+    p75: float
+    n: int
+    scope: str          # "category" | "global"
+    label: str          # human-readable, e.g. "689 products in this category"
+
+    def ratio(self, value: float) -> float:
+        """Prediction as a multiple of the reference median (1.0 == typical)."""
+        return value / self.p50
+
+
 def _default_assets_dir() -> Path:
     """``sys._MEIPASS`` when frozen by PyInstaller, otherwise ``desktop_app/assets``."""
     if getattr(sys, "frozen", False):
@@ -149,6 +170,15 @@ class InferenceAdapter:
         with open(materials_path, "r", encoding="utf-8") as f:
             self.materials: List[str] = json.load(f)
 
+        # Reference distributions are optional: an installation baked before they
+        # existed still runs, it just can't show "vs. typical" context.
+        distributions_path = self.assets_dir / "distributions.json"
+        if distributions_path.exists():
+            with open(distributions_path, "r", encoding="utf-8") as f:
+                self._distributions: Dict[str, dict] = json.load(f).get("targets", {})
+        else:
+            self._distributions = {}
+
         cat_materials_path = self.assets_dir / "category_materials.json"
         if cat_materials_path.exists():
             with open(cat_materials_path, "r", encoding="utf-8") as f:
@@ -229,6 +259,53 @@ class InferenceAdapter:
             key: predict_ghg_with_loaded(product, self.vocab, loaded)
             for key, loaded in self.loaded.items()
         }
+
+    def reference(
+        self, category: str, target_key: Optional[str] = None
+    ) -> Optional[Reference]:
+        """
+        Distribution of real products to report this target against.
+
+        Prefers the product's own category; falls back to the whole dataset when
+        that category was too thin to bake (see MIN_REFERENCE_N in bake_assets).
+        Returns None when neither is usable -- notably the zero-inflated C3/C4
+        stages, where a median of 0 makes a ratio meaningless.
+        """
+        target_key = target_key or self.default_target_key
+        entry = self._distributions.get(target_key)
+        if not entry:
+            return None
+
+        stats = (entry.get("categories") or {}).get(category)
+        if stats:
+            return Reference(
+                p25=stats["p25"], p50=stats["p50"], p75=stats["p75"], n=stats["n"],
+                scope="category",
+                label=f"{stats['n']} products in this category",
+            )
+
+        stats = entry.get("global")
+        if stats:
+            return Reference(
+                p25=stats["p25"], p50=stats["p50"], p75=stats["p75"], n=stats["n"],
+                scope="global",
+                label=f"all {stats['n']} products (too few in this category)",
+            )
+        return None
+
+    def indicator_keys(self) -> List[str]:
+        """Distinct indicator_keys across baked targets, in manifest order."""
+        seen: List[str] = []
+        for entry in self.manifest.values():
+            if entry["indicator_key"] not in seen:
+                seen.append(entry["indicator_key"])
+        return seen
+
+    def target_for(self, indicator_key: str, stage_key: str = "total") -> Optional[str]:
+        for key, entry in self.manifest.items():
+            if entry["indicator_key"] == indicator_key and entry["stage_key"] == stage_key:
+                return key
+        return None
 
     def prediction_range(
         self, prediction: float, category: str, target_key: Optional[str] = None

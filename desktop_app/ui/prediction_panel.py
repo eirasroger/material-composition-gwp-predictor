@@ -1,43 +1,66 @@
 """
-Prediction panel: large numeric display + a matplotlib horizontal gauge over
-the trained range [GHG_MIN, GHG_MAX] (see ``src/config.py``). A single
-``set_prediction(value)`` updates both. ``set_status(text)`` feeds the warning
-line beneath (e.g. "Materials don't sum to 100 — predicted as if normalised.").
+Prediction panel: large numeric display + a matplotlib gauge, for ONE target.
+
+The gauge shows the prediction against the distribution of real products in the
+same category (p25 / median / p75), not against the trained value range. A
+linear track over [value_min, value_max] is meaningless for most indicators --
+``adpf_a1a3`` spans 0-650 with a median of 8.5, so every ordinary product would
+pin to the far left. Where no reference distribution exists (the zero-inflated
+C3/C4 stages, whose median is 0) it falls back to the trained range.
+
+``set_target(...)`` re-labels the panel for the selected indicator; everything
+that was hardcoded to GHG comes from the target manifest instead.
 """
 
 from __future__ import annotations
 
 import tkinter as tk
+from typing import Optional
 
 import customtkinter as ctk
 import matplotlib
 matplotlib.use("TkAgg")  # noqa: E402
+import numpy as np  # noqa: E402
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
 
 from desktop_app.ui.theme import (
-    ACCENT, BORDER, SURFACE, TEXT_SEC, TEXT_DIM, TEXT_PRI, font, stage_color, stage_sort_key,
+    ACCENT, BORDER, SURFACE, TEXT_SEC, TEXT_DIM, TEXT_PRI, font,
+    fmt_value as _fmt, stage_color, stage_label, stage_sort_key,
 )
-from src.config import GHG_MAX, GHG_MIN
 
 
 class PredictionPanel(ctk.CTkFrame):
-    def __init__(self, master, color: str = ACCENT) -> None:
+    def __init__(
+        self,
+        master,
+        color: str = ACCENT,
+        display_name: str = "GHG Total",
+        unit: str = "kg CO2-eq/kg",
+        value_min: float = 0.0,
+        value_max: float = 10.0,
+    ) -> None:
         super().__init__(master, fg_color="transparent")
-        self._color = color
+        self._color        = color
+        self._display_name = display_name
+        self._unit         = unit
+        self._value_min    = value_min
+        self._value_max    = value_max
+        self._reference    = None
 
         # ── header label ──────────────────────────────────────────────────────
-        ctk.CTkLabel(
+        self._header_label = ctk.CTkLabel(
             self,
-            text="Predicted greenhouse gas emissions",
+            text=f"Predicted {display_name}",
             font=font(12),
             text_color=TEXT_SEC,
-        ).pack(anchor="w", padx=24, pady=(28, 0))
+        )
+        self._header_label.pack(anchor="w", padx=24, pady=(28, 0))
 
         # ── big value ─────────────────────────────────────────────────────────
         self._value_label = ctk.CTkLabel(
             self,
-            text="— kg CO₂eq / kg",
+            text=f"— {unit}",
             font=font(34, "bold"),
             text_color=color,
         )
@@ -48,12 +71,16 @@ class PredictionPanel(ctk.CTkFrame):
         divider.pack(fill="x", padx=24, pady=(0, 16))
 
         # ── matplotlib gauge ──────────────────────────────────────────────────
-        ctk.CTkLabel(
+        self._gauge_caption = ctk.CTkLabel(
             self,
-            text="Position within training range",
+            text="Compared with real products",
             font=font(11),
             text_color=TEXT_DIM,
-        ).pack(anchor="w", padx=24)
+            anchor="w",
+            justify="left",
+            wraplength=420,
+        )
+        self._gauge_caption.pack(anchor="w", fill="x", padx=24)
 
         self._fig = Figure(figsize=(4.4, 1.1), dpi=100)
         self._fig.patch.set_facecolor(SURFACE)
@@ -133,19 +160,57 @@ class PredictionPanel(ctk.CTkFrame):
 
         self._draw_gauge(None)
 
+    def set_target(
+        self,
+        display_name: str,
+        unit: str,
+        value_min: float,
+        value_max: float,
+        color: str | None = None,
+    ) -> None:
+        """Re-point the panel at another indicator/stage."""
+        self._display_name = display_name
+        self._unit         = unit
+        self._value_min    = value_min
+        self._value_max    = value_max
+        if color is not None:
+            self._color = color
+            self._value_label.configure(text_color=color)
+        self._header_label.configure(text=f"Predicted {display_name}")
+        self.clear_prediction()
+
     def set_prediction(
         self,
         value: float,
         bounds: "tuple[float, float] | None" = None,
         breakdown: "list[dict] | None" = None,
+        reference=None,
     ) -> None:
-        self._value_label.configure(text=f"{value:.3f} kg CO₂eq / kg")
+        self._reference = reference
+        self._value_label.configure(text=f"{_fmt(value)} {self._unit}")
         if bounds is not None:
             self._range_label.configure(
-                text=f"Plausible range: {bounds[0]:.2f} – {bounds[1]:.2f} kg CO₂eq / kg"
+                text=f"Plausible range: {_fmt(bounds[0])} – {_fmt(bounds[1])} {self._unit}"
             )
         else:
             self._range_label.configure(text="")
+
+        if reference is not None:
+            ratio = reference.ratio(value)
+            verdict = (
+                "about typical" if 0.8 <= ratio <= 1.25
+                else ("below typical" if ratio < 0.8 else "above typical")
+            )
+            self._gauge_caption.configure(
+                text=(
+                    f"{ratio:.2g}× the median — {verdict}. "
+                    f"Compared with {reference.label}."
+                )
+            )
+        else:
+            self._gauge_caption.configure(
+                text=f"Position within trained range ({_fmt(self._value_min)} – {_fmt(self._value_max)})"
+            )
         self._draw_gauge(float(value), bounds)
 
         self._breakdown_data = breakdown or None
@@ -158,8 +223,10 @@ class PredictionPanel(ctk.CTkFrame):
             self._draw_breakdown()
 
     def clear_prediction(self) -> None:
-        self._value_label.configure(text="— kg CO₂eq / kg")
+        self._value_label.configure(text=f"— {self._unit}")
         self._range_label.configure(text="")
+        self._reference = None
+        self._gauge_caption.configure(text="Compared with real products")
         self._draw_gauge(None)
         self._breakdown_data = None
         self._breakdown_toggle.configure(state="disabled")
@@ -208,7 +275,7 @@ class PredictionPanel(ctk.CTkFrame):
         x = list(range(n))
         values = [s["value"] for s in stages]
         colors = [stage_color(s["stage_key"]) for s in stages]
-        labels = [s["display_name"].replace("GHG ", "") for s in stages]
+        labels = [stage_label(s["stage_key"]) for s in stages]
 
         # Asymmetric error bars from each stage's own plausible range.
         yerr_low, yerr_high = [], []
@@ -228,11 +295,14 @@ class PredictionPanel(ctk.CTkFrame):
         )
         ax.axhline(0, color=BORDER, linewidth=1, zorder=1)
 
-        pad = 0.02 * max(1.0, max(abs(v) for v in values))
+        # Pad relative to the data's own magnitude -- a fixed 0.02 is invisible
+        # on MJ/kg and enormous on kg PO4-eq/kg.
+        span = max(abs(v) for v in values) or 1.0
+        pad = 0.04 * span
         for xi, v, err_hi, err_lo in zip(x, values, yerr_high, yerr_low):
             label_y = v + err_hi + pad if v >= 0 else v - err_lo - pad
             ax.text(
-                xi, label_y, f"{v:.2f}", ha="center",
+                xi, label_y, _fmt(v), ha="center",
                 va="bottom" if v >= 0 else "top",
                 color=TEXT_PRI, fontsize=8,
             )
@@ -252,14 +322,38 @@ class PredictionPanel(ctk.CTkFrame):
 
         self._breakdown_canvas.draw_idle()
 
+    # The gauge works in log10(value / reference median) when a reference exists,
+    # so the axis is "×0.1 … median … ×10" rather than a linear span the data
+    # never fills. _DECADES matches the summary radar so the two agree.
+    _DECADES = 1.0
+
+    def _scale(self):
+        """(lo, hi, to_x, tick_positions, tick_labels, axis_label) for the gauge."""
+        ref = self._reference
+        if ref is not None:
+            d = self._DECADES
+            def to_x(v: float) -> float:
+                if v <= 0:
+                    return -d
+                return max(-d, min(d, np.log10(v / ref.p50)))
+            ticks  = [-d, np.log10(0.5), 0.0, np.log10(2.0), d]
+            labels = ["×0.1", "×0.5", "median", "×2", "×10"]
+            return -d, d, to_x, ticks, labels, f"vs. {ref.label}"
+
+        lo, hi = self._value_min, self._value_max
+        def to_x(v: float) -> float:
+            return max(lo, min(hi, v))
+        return lo, hi, to_x, None, None, f"{self._unit}  (trained range)"
+
     def _configure_axes(self) -> None:
-        self._ax.set_xlim(GHG_MIN, GHG_MAX)
+        lo, hi, _, ticks, labels, axis_label = self._scale()
+        self._ax.set_xlim(lo, hi)
         self._ax.set_ylim(0, 1)
         self._ax.set_yticks([])
-        self._ax.set_xlabel(
-            "kg CO₂eq / kg  (training range)",
-            color=TEXT_SEC, fontsize=8, labelpad=4,
-        )
+        if ticks is not None:
+            self._ax.set_xticks(ticks)
+            self._ax.set_xticklabels(labels)
+        self._ax.set_xlabel(axis_label, color=TEXT_SEC, fontsize=8, labelpad=4)
         self._ax.tick_params(colors=TEXT_SEC, labelsize=8, length=3)
         self._ax.set_facecolor(SURFACE)
         for spine in ("top", "right", "left"):
@@ -270,42 +364,51 @@ class PredictionPanel(ctk.CTkFrame):
     def _draw_gauge(self, value, bounds=None) -> None:
         self._ax.clear()
         self._configure_axes()
+        lo, hi, to_x, _, _, _ = self._scale()
+        ref = self._reference
+
         # Background track
         self._ax.barh(
-            [0.5], [GHG_MAX - GHG_MIN], left=GHG_MIN, height=0.28,
-            color=BORDER, edgecolor="none",
+            [0.5], [hi - lo], left=lo, height=0.28, color=BORDER, edgecolor="none",
         )
-        if value is not None:
-            clamped = max(GHG_MIN, min(GHG_MAX, value))
-            # Plausible range band (wider, behind the fill)
-            if bounds is not None:
-                r_low  = max(GHG_MIN, bounds[0])
-                r_high = min(GHG_MAX, bounds[1])
-                self._ax.barh(
-                    [0.5], [r_high - r_low], left=r_low, height=0.52,
-                    color=self._color + "28", edgecolor=self._color + "70", linewidth=0.8,
-                    zorder=1,
-                )
-            # Filled portion of track
+        # Typical range (p25-p75) of real products, and the median marker.
+        if ref is not None:
+            x25, x75 = to_x(ref.p25), to_x(ref.p75)
             self._ax.barh(
-                [0.5], [clamped - GHG_MIN], left=GHG_MIN, height=0.28,
-                color=self._color + "55", edgecolor="none", zorder=2,
+                [0.5], [x75 - x25], left=x25, height=0.28,
+                color=TEXT_DIM, alpha=0.55, edgecolor="none", zorder=1,
             )
-            # Needle line + dot
-            self._ax.axvline(clamped, color=self._color, linewidth=2, alpha=0.9, zorder=3)
+            self._ax.axvline(0.0, color=TEXT_SEC, linewidth=1.0, alpha=0.9, zorder=2)
+
+        if value is not None:
+            x = to_x(value)
+            if bounds is not None:
+                x_low, x_high = to_x(bounds[0]), to_x(bounds[1])
+                if x_high > x_low:
+                    self._ax.barh(
+                        [0.5], [x_high - x_low], left=x_low, height=0.52,
+                        color=self._color + "28", edgecolor=self._color + "70",
+                        linewidth=0.8, zorder=3,
+                    )
+            self._ax.axvline(x, color=self._color, linewidth=2, alpha=0.9, zorder=4)
             self._ax.plot(
-                [clamped], [0.5], marker="o", color=self._color,
-                markersize=9, zorder=4, markeredgecolor=SURFACE, markeredgewidth=1.5,
+                [x], [0.5], marker="o", color=self._color,
+                markersize=9, zorder=5, markeredgecolor=SURFACE, markeredgewidth=1.5,
             )
-            if value > GHG_MAX:
+            # Flag a clamped needle so the rail is never read as the real value.
+            off_hi = (ref is not None and value / ref.p50 > 10 ** self._DECADES) \
+                or (ref is None and value > self._value_max)
+            off_lo = (ref is not None and 0 < value / ref.p50 < 10 ** -self._DECADES) \
+                or (ref is None and value < self._value_min)
+            if off_hi:
                 self._ax.text(
-                    GHG_MAX, 0.92, "  > range",
-                    color="#d44a4a", fontsize=8, va="top", ha="right",
+                    hi, 0.92, "  off scale", color="#d44a4a",
+                    fontsize=8, va="top", ha="right",
                 )
-            elif value < GHG_MIN:
+            elif off_lo:
                 self._ax.text(
-                    GHG_MIN, 0.92, "< range  ",
-                    color="#d44a4a", fontsize=8, va="top", ha="left",
+                    lo, 0.92, "off scale  ", color="#d44a4a",
+                    fontsize=8, va="top", ha="left",
                 )
         self._mpl_canvas.draw_idle()
 

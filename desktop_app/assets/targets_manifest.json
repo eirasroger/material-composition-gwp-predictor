@@ -1,4 +1,124 @@
 {
+  "adpf_a1a3": {
+    "indicator_key": "adpf",
+    "stage_key": "a1a3",
+    "display_name": "Fossil Depletion A1-A3",
+    "unit": "MJ/kg"
+  },
+  "adpf_c3": {
+    "indicator_key": "adpf",
+    "stage_key": "c3",
+    "display_name": "Fossil Depletion C3",
+    "unit": "MJ/kg"
+  },
+  "adpf_c4": {
+    "indicator_key": "adpf",
+    "stage_key": "c4",
+    "display_name": "Fossil Depletion C4",
+    "unit": "MJ/kg"
+  },
+  "adpf_d": {
+    "indicator_key": "adpf",
+    "stage_key": "d",
+    "display_name": "Fossil Depletion D (avoided burden)",
+    "unit": "MJ/kg"
+  },
+  "adpf_total": {
+    "indicator_key": "adpf",
+    "stage_key": "total",
+    "display_name": "Fossil Depletion Total",
+    "unit": "MJ/kg"
+  },
+  "ap_a1a3": {
+    "indicator_key": "ap",
+    "stage_key": "a1a3",
+    "display_name": "Acidification A1-A3",
+    "unit": "kg SO2-eq/kg"
+  },
+  "ap_c3": {
+    "indicator_key": "ap",
+    "stage_key": "c3",
+    "display_name": "Acidification C3",
+    "unit": "kg SO2-eq/kg"
+  },
+  "ap_c4": {
+    "indicator_key": "ap",
+    "stage_key": "c4",
+    "display_name": "Acidification C4",
+    "unit": "kg SO2-eq/kg"
+  },
+  "ap_d": {
+    "indicator_key": "ap",
+    "stage_key": "d",
+    "display_name": "Acidification D (avoided burden)",
+    "unit": "kg SO2-eq/kg"
+  },
+  "ap_total": {
+    "indicator_key": "ap",
+    "stage_key": "total",
+    "display_name": "Acidification Total",
+    "unit": "kg SO2-eq/kg"
+  },
+  "ep_a1a3": {
+    "indicator_key": "ep",
+    "stage_key": "a1a3",
+    "display_name": "Eutrophication A1-A3",
+    "unit": "kg PO4-eq/kg"
+  },
+  "ep_c3": {
+    "indicator_key": "ep",
+    "stage_key": "c3",
+    "display_name": "Eutrophication C3",
+    "unit": "kg PO4-eq/kg"
+  },
+  "ep_c4": {
+    "indicator_key": "ep",
+    "stage_key": "c4",
+    "display_name": "Eutrophication C4",
+    "unit": "kg PO4-eq/kg"
+  },
+  "ep_d": {
+    "indicator_key": "ep",
+    "stage_key": "d",
+    "display_name": "Eutrophication D (avoided burden)",
+    "unit": "kg PO4-eq/kg"
+  },
+  "ep_total": {
+    "indicator_key": "ep",
+    "stage_key": "total",
+    "display_name": "Eutrophication Total",
+    "unit": "kg PO4-eq/kg"
+  },
+  "fw_a1a3": {
+    "indicator_key": "fw",
+    "stage_key": "a1a3",
+    "display_name": "Water Depletion A1-A3",
+    "unit": "m3/kg"
+  },
+  "fw_c3": {
+    "indicator_key": "fw",
+    "stage_key": "c3",
+    "display_name": "Water Depletion C3",
+    "unit": "m3/kg"
+  },
+  "fw_c4": {
+    "indicator_key": "fw",
+    "stage_key": "c4",
+    "display_name": "Water Depletion C4",
+    "unit": "m3/kg"
+  },
+  "fw_d": {
+    "indicator_key": "fw",
+    "stage_key": "d",
+    "display_name": "Water Depletion D (avoided burden)",
+    "unit": "m3/kg"
+  },
+  "fw_total": {
+    "indicator_key": "fw",
+    "stage_key": "total",
+    "display_name": "Water Depletion Total",
+    "unit": "m3/kg"
+  },
   "ghg_a1a3": {
     "indicator_key": "ghg",
     "stage_key": "a1a3",
