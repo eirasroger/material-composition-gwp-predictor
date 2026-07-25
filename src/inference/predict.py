@@ -1,12 +1,15 @@
 """
-Inference helpers: load a trained checkpoint and produce GHG predictions.
+Inference helpers: load a trained checkpoint and produce predictions.
 
 Two entry points:
 - ``load_model(checkpoint)`` -> ``LoadedModel`` (cache once, reuse for many predictions).
-- ``predict_ghg(product, vocab, checkpoint=...)`` (backward-compatible: loads + predicts in one call).
+- ``predict_ghg(product, vocab, checkpoint=...)`` (backward-compatible: loads + predicts).
 
-Use ``load_model`` + ``predict_ghg_with_loaded`` for interactive applications where
-a fresh ``torch.load`` per prediction would be unacceptable.
+Use ``load_model`` + ``predict_ghg_with_loaded`` for interactive applications.
+
+The inverse transform (log1p or signed_log1p) is stored in the checkpoint under
+'transform_type' and applied automatically.  Old checkpoints without that key
+default to 'log1p' for backward compatibility.
 """
 
 from dataclasses import dataclass, field
@@ -20,6 +23,13 @@ from src.config import GHG_MAX, GHG_MIN, MODEL_PATH
 from src.data.preprocessing import normalize_product
 from src.embeddings.encode import category_onehot, product_embedding
 from src.model.network import GHGNet
+from src.utils import signed_expm1
+
+
+def _make_inverse_fn(transform_type: str):
+    if transform_type == "signed_log1p":
+        return signed_expm1
+    return np.expm1
 
 
 @dataclass
@@ -29,6 +39,7 @@ class LoadedModel:
     y_scale: float
     cat_index: Dict[str, int]
     input_dim: int
+    transform_type: str = "log1p"
     category_error_bounds: Optional[Dict[str, Dict]] = field(default=None)
 
 
@@ -49,6 +60,7 @@ def load_model(checkpoint: Union[str, Path] = MODEL_PATH) -> LoadedModel:
         y_scale=float(ckpt["y_scale"]),
         cat_index=ckpt["cat_index"],
         input_dim=int(ckpt["input_dim"]),
+        transform_type=ckpt.get("transform_type", "log1p"),
         category_error_bounds=ckpt.get("category_error_bounds"),
     )
 
@@ -59,7 +71,8 @@ def predict_ghg_with_loaded(
     loaded: LoadedModel,
 ) -> float:
     normalized = normalize_product(
-        product, loaded.cat_index, require_target=False, ghg_min=GHG_MIN, ghg_max=GHG_MAX
+        product, loaded.cat_index, require_target=False,
+        value_min=GHG_MIN, value_max=GHG_MAX,
     )
     if normalized is None:
         raise ValueError(
@@ -84,7 +97,8 @@ def predict_ghg_with_loaded(
     with torch.no_grad():
         pred_scaled = loaded.model(x).item()
 
-    return float(np.expm1(pred_scaled * loaded.y_scale + loaded.y_mean))
+    inverse_fn = _make_inverse_fn(loaded.transform_type)
+    return float(inverse_fn(pred_scaled * loaded.y_scale + loaded.y_mean))
 
 
 def predict_ghg(

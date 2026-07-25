@@ -1,7 +1,7 @@
 """
 Training loop with AdamW + ReduceLROnPlateau + Huber loss + early stopping.
-Targets are expected to be log1p-then-StandardScaler scaled; the loop inverts
-that transform when computing reportable val metrics.
+Targets are expected to be forward-transformed then StandardScaler-scaled;
+the loop inverts that transform when computing reportable val metrics.
 """
 
 import numpy as np
@@ -13,7 +13,22 @@ from src.config import EPOCHS, LR, PATIENCE, WEIGHT_DECAY
 from src.utils import r2_safe
 
 
-def train_model(model, train_loader, val_loader, device, scaler_y_mean, scaler_y_scale):
+def train_model(
+    model,
+    train_loader,
+    val_loader,
+    device,
+    scaler_y_mean,
+    scaler_y_scale,
+    inverse_fn=None,
+):
+    """
+    inverse_fn: callable that maps scaled model output back to original units.
+    Defaults to np.expm1 (log1p transform) for backward compatibility.
+    """
+    if inverse_fn is None:
+        inverse_fn = np.expm1
+
     opt     = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     sched   = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, patience=8, factor=0.5)
     loss_fn = nn.HuberLoss(delta=1.0)
@@ -51,8 +66,8 @@ def train_model(model, train_loader, val_loader, device, scaler_y_mean, scaler_y
                 actuals_s.extend(yb.cpu().numpy())
         v_loss /= len(val_loader.dataset)
 
-        preds   = np.expm1(np.asarray(preds_s)  * scaler_y_scale + scaler_y_mean)
-        actuals = np.expm1(np.asarray(actuals_s) * scaler_y_scale + scaler_y_mean)
+        preds   = inverse_fn(np.asarray(preds_s)   * scaler_y_scale + scaler_y_mean)
+        actuals = inverse_fn(np.asarray(actuals_s)  * scaler_y_scale + scaler_y_mean)
 
         v_mae = mean_absolute_error(actuals, preds)
         v_r2  = r2_safe(actuals, preds)

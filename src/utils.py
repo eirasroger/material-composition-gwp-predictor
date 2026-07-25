@@ -58,3 +58,15 @@ def normalise_shares_to_100(values: List[float]) -> List[float]:
     if total <= 0:
         return [0.0 for _ in values]
     return [100.0 * v / total for v in values]
+
+
+def signed_log1p(x) -> np.ndarray:
+    """sign(x) * log1p(|x|) — monotonic log-like transform that handles negatives."""
+    a = np.asarray(x, dtype=np.float64)
+    return np.sign(a) * np.log1p(np.abs(a))
+
+
+def signed_expm1(x) -> np.ndarray:
+    """Inverse of signed_log1p: sign(x) * expm1(|x|)."""
+    a = np.asarray(x, dtype=np.float64)
+    return np.sign(a) * np.expm1(np.abs(a))

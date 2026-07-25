@@ -1,6 +1,11 @@
 """
 End-to-end pipeline orchestration: load -> filter -> embed -> split -> train ->
 evaluate -> save artefacts -> demo inference.
+
+The pipeline is domain-agnostic.  All target-specific knowledge (field path,
+value range, transform, thresholds, unit) is supplied via TARGET_CONFIGS in
+config.py.  To train a new impact category, add an entry there — no code
+changes here.
 """
 
 from collections import Counter, defaultdict
@@ -16,19 +21,14 @@ from src.config import (
     BASE_DIR,
     BATCH_SIZE,
     DATASET_PATH,
-    DIAGNOSTICS_PATH,
     DROPOUT,
     EMBED_DIM,
-    GHG_MAX,
-    GHG_MIN,
     HIDDEN_DIMS,
     MIN_CATEGORY_COUNT,
-    MODEL_PATH,
+    MODELS_DIR,
     N_CIRC_FEATURES,
-    PRED_SCATTER_PATH,
-    RESIDUALS_PATH,
     SEEDS,
-    TRAINING_PLOT_PATH,
+    TARGET_CONFIGS,
 )
 from src.data.features import build_features
 from src.data.loader import (
@@ -38,7 +38,6 @@ from src.data.loader import (
 )
 from src.data.preprocessing import filter_valid_products
 from src.embeddings.vocab import get_vocab
-from src.inference.predict import predict_ghg
 from src.model.dataset import GHGDataset
 from src.model.network import GHGNet
 from src.reporting.plots import save_diagnostics, save_plots
@@ -48,13 +47,52 @@ from src.train.evaluator import (
     print_worst_predictions,
 )
 from src.train.trainer import train_model
+from src.utils import signed_expm1, signed_log1p
 
 
-def run():
+def _get_transforms(transform_type: str):
+    """Return (forward_fn, inverse_fn) for the requested transform."""
+    if transform_type == "signed_log1p":
+        return signed_log1p, signed_expm1
+    if transform_type == "log1p":
+        return np.log1p, np.expm1
+    raise ValueError(f"Unknown transform '{transform_type}'. Use 'log1p' or 'signed_log1p'.")
+
+
+def run(target_key: str = "ghg_total"):
+    if target_key not in TARGET_CONFIGS:
+        raise ValueError(
+            f"Unknown target '{target_key}'. "
+            f"Available: {sorted(TARGET_CONFIGS.keys())}"
+        )
+    cfg = TARGET_CONFIGS[target_key]
+
+    field_path   = cfg["field_path"]
+    value_min    = cfg["value_min"]
+    value_max    = cfg["value_max"]
+    transform    = cfg["transform"]
+    thresholds   = cfg["thresholds"]
+    unit         = cfg["unit"]
+    display_name = cfg["display_name"]
+
+    forward_fn, inverse_fn = _get_transforms(transform)
+
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    model_path       = MODELS_DIR / f"{target_key}.pt"
+    figures_dir      = BASE_DIR / "figures" / target_key
+    figures_dir.mkdir(parents=True, exist_ok=True)
+    plot_paths       = {
+        "training":  figures_dir / "training_curves.png",
+        "scatter":   figures_dir / "pred_vs_actual.png",
+        "residuals": figures_dir / "residuals.png",
+    }
+    diagnostics_path = BASE_DIR / f"diagnostics_{target_key}.json"
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
+    print(f"Target: {display_name}  ({target_key})")
+    print(f"Field:  {field_path}  |  range [{value_min}, {value_max}]  |  transform: {transform}")
     print(f"Script directory: {BASE_DIR}")
-    print(f"Current working directory: {Path.cwd()}")
 
     print(f"\nLoading '{DATASET_PATH.name}' ...")
     products = load_dataset(DATASET_PATH)
@@ -64,18 +102,23 @@ def run():
     cat_index = build_category_index(products, min_count=MIN_CATEGORY_COUNT)
     print(f"Active categories ({len(cat_index)}): {sorted(cat_index.keys())}")
 
-    valid_products = filter_valid_products(products, cat_index)
+    valid_products = filter_valid_products(
+        products, cat_index,
+        value_min=value_min,
+        value_max=value_max,
+        target_field_path=field_path,
+    )
 
     if len(valid_products) < 10:
         raise ValueError("Need at least 10 valid labelled samples after filtering.")
 
-    ghg_values = np.array([p["ghg"] for p in valid_products], dtype=np.float32)
+    target_values = np.array([p["target"] for p in valid_products], dtype=np.float32)
     print(
-        f"\nGHG summary after filtering -> "
-        f"min: {ghg_values.min():.4f}, "
-        f"median: {np.median(ghg_values):.4f}, "
-        f"max: {ghg_values.max():.4f}, "
-        f"mean: {ghg_values.mean():.4f}"
+        f"\nTarget summary after filtering -> "
+        f"min: {target_values.min():.4f}, "
+        f"median: {np.median(target_values):.4f}, "
+        f"max: {target_values.max():.4f}, "
+        f"mean: {target_values.mean():.4f}"
     )
 
     cat_counts_valid = Counter(p["category"] for p in valid_products)
@@ -98,9 +141,15 @@ def run():
     print(f"Feature matrix shape: {X.shape}")
     print(f"Products used for training: {len(y)}")
 
-    y_log    = np.log1p(y)
+    y_transformed = forward_fn(y.astype(np.float64)).astype(np.float64)
+    if not np.isfinite(y_transformed).all():
+        raise ValueError(
+            "Forward transform produced non-finite values. "
+            "Check value_min/value_max or the transform type."
+        )
+
     scaler_y = StandardScaler()
-    sy       = scaler_y.fit_transform(y_log.reshape(-1, 1)).ravel().astype(np.float32)
+    sy       = scaler_y.fit_transform(y_transformed.reshape(-1, 1)).ravel().astype(np.float32)
 
     if not np.isfinite(sy).all():
         raise ValueError("Target scaling produced non-finite values. Check the dataset.")
@@ -157,11 +206,20 @@ def run():
 
         model = GHGNet(input_dim=input_dim).to(device)
         model, history = train_model(
-            model, train_loader, val_loader, device, scaler_y_mean, scaler_y_scale
+            model, train_loader, val_loader, device,
+            scaler_y_mean, scaler_y_scale, inverse_fn=inverse_fn,
         )
 
-        val_res  = evaluate_model(model, val_loader,  device, scaler_y_mean, scaler_y_scale)
-        test_res = evaluate_model(model, test_loader, device, scaler_y_mean, scaler_y_scale)
+        val_res  = evaluate_model(
+            model, val_loader,  device, scaler_y_mean, scaler_y_scale,
+            inverse_fn=inverse_fn, value_min=value_min, value_max=value_max,
+            thresholds=thresholds,
+        )
+        test_res = evaluate_model(
+            model, test_loader, device, scaler_y_mean, scaler_y_scale,
+            inverse_fn=inverse_fn, value_min=value_min, value_max=value_max,
+            thresholds=thresholds,
+        )
 
         test_cats = [categories_all[i] for i in idx_te]
         for pred, actual, cat in zip(test_res["preds"], test_res["actuals"], test_cats):
@@ -227,15 +285,15 @@ def run():
     print(f"\n{'=' * 50}")
     print(f"  BEST MODEL (seed {best_seed}) — TEST SET RESULTS")
     print("=" * 50)
-    print(f"  MAE           {best_test_res['mae']:.4f} kg CO2-eq")
-    print(f"  RMSE          {best_test_res['rmse']:.4f} kg CO2-eq")
-    print(f"  NRMSE         {best_test_res['nrmse']:.4f}  (fraction of [{GHG_MIN}, {GHG_MAX}] range)")
-    print(f"  R2 (range)    {best_test_res['r2_range']:.6f}  (vs fixed scale)")
-    print(f"  R2 (sample)   {best_test_res['r2_sample']:.4f}  (vs sample variance, for reference)")
-    print(f"  Within +-0.5  {best_test_res['within_0.5kg']:.1f}%")
-    print(f"  Within +-1.0  {best_test_res['within_1.0kg']:.1f}%")
-    print(f"  Within +-2.0  {best_test_res['within_2.0kg']:.1f}%")
-    print(f"  Within +-5.0  {best_test_res['within_5.0kg']:.1f}%")
+    print(f"  Target        {display_name}  [{unit}]")
+    print(f"  MAE           {best_test_res['mae']:.4f}")
+    print(f"  RMSE          {best_test_res['rmse']:.4f}")
+    print(f"  NRMSE         {best_test_res['nrmse']:.4f}  (fraction of [{value_min}, {value_max}] range)")
+    print(f"  R2 (range)    {best_test_res['r2_range']:.6f}")
+    print(f"  R2 (sample)   {best_test_res['r2_sample']:.4f}")
+    for t in thresholds:
+        key = f"within_{t}"
+        print(f"  Within ±{t:<6} {best_test_res[key]:.1f}%")
     print("=" * 50)
 
     print("\n-- Sample predictions (first 5 of best-seed test set) --")
@@ -246,16 +304,19 @@ def run():
         print(f"  {a:>10.4f}  {p:>10.4f}  {abs(a - p):>10.4f}  {c}")
 
     per_cat_metrics = print_category_metrics(
-        best_test_res["actuals"], best_test_res["preds"], best_test_cats
+        best_test_res["actuals"], best_test_res["preds"], best_test_cats,
+        value_min=value_min, value_max=value_max, thresholds=thresholds,
     )
     print_worst_predictions(
         best_test_res["actuals"], best_test_res["preds"], best_test_cats, n=10
     )
 
-    save_plots(best_history, best_test_res["actuals"], best_test_res["preds"])
-    print(f"\nSaved plot -> {TRAINING_PLOT_PATH}")
-    print(f"Saved plot -> {PRED_SCATTER_PATH}")
-    print(f"Saved plot -> {RESIDUALS_PATH}")
+    save_plots(
+        best_history, best_test_res["actuals"], best_test_res["preds"],
+        paths=plot_paths, display_name=display_name, unit=unit,
+    )
+    for key, path in plot_paths.items():
+        print(f"Saved plot ({key}) -> {path}")
 
     torch.save(
         {
@@ -266,13 +327,24 @@ def run():
             "dropout":               DROPOUT,
             "cat_index":             cat_index,
             "input_dim":             input_dim,
+            "transform_type":        transform,
+            "target_key":            target_key,
+            "field_path":            field_path,
+            "value_min":             value_min,
+            "value_max":             value_max,
+            "unit":                  unit,
+            "display_name":          display_name,
             "category_error_bounds": category_error_bounds,
         },
-        str(MODEL_PATH),
+        str(model_path),
     )
-    print(f"Model saved -> {MODEL_PATH}  (best seed: {best_seed})")
+    print(f"Model saved -> {model_path}  (best seed: {best_seed})")
 
     diagnostics = {
+        "target_key":             target_key,
+        "display_name":           display_name,
+        "unit":                   unit,
+        "field_path":             field_path,
         "total_products":         len(products),
         "valid_products":         len(valid_products),
         "vocab_size":             len(vocab),
@@ -280,8 +352,10 @@ def run():
         "n_circularity_features": N_CIRC_FEATURES,
         "input_dim":              input_dim,
         "categories":             sorted(cat_index.keys()),
-        "ghg_min":                GHG_MIN,
-        "ghg_max":                GHG_MAX,
+        "value_min":              value_min,
+        "value_max":              value_max,
+        "transform":              transform,
+        "thresholds":             thresholds,
         "min_category_count":     MIN_CATEGORY_COUNT,
         "seeds":                  SEEDS,
         "best_seed":              best_seed,
@@ -303,12 +377,5 @@ def run():
         },
         "history": best_history,
     }
-    save_diagnostics(diagnostics)
-    print(f"Diagnostics saved -> {DIAGNOSTICS_PATH}")
-
-    example_raw  = valid_products[best_example_idx]["raw"]
-    example_pred = predict_ghg(example_raw, vocab, checkpoint=MODEL_PATH)
-    example_true = valid_products[best_example_idx]["ghg"]
-    print("\n-- Inference demo --")
-    print(f"  True GHG : {example_true:.4f} kg CO2-eq")
-    print(f"  Pred GHG : {example_pred:.4f} kg CO2-eq")
+    save_diagnostics(diagnostics, diagnostics_path)
+    print(f"Diagnostics saved -> {diagnostics_path}")

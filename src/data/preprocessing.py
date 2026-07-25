@@ -1,19 +1,28 @@
 """
 Per-product validation, normalisation, and circularity feature extraction.
+
+The target value is extracted via a configurable field_path (list of JSON keys),
+so this module is domain-agnostic — it works for GHG, eutrophication, etc.
 """
 
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from src.config import GHG_MAX, GHG_MIN, TARGET_FIELD
 from src.utils import normalise_shares_to_100, safe_float
 
+_DEFAULT_FIELD_PATH = ["ghg_footprint", TARGET_FIELD]
+
 
 def _get_materials(product: dict) -> list:
-    """
-    Return the materials list from:
-      product["product_integrity"]["materials"]
-    """
     return (product.get("product_integrity") or {}).get("materials") or []
+
+
+def _get_field(product: dict, field_path: List[str]):
+    """Navigate a list of JSON keys from the product root."""
+    val = product
+    for key in field_path:
+        val = (val or {}).get(key)
+    return val
 
 
 def extract_circularity_features(product: dict) -> Optional[Dict[str, float]]:
@@ -46,9 +55,23 @@ def normalize_product(
     product: dict,
     cat_index: Dict[str, int],
     require_target: bool = True,
-    ghg_min: float = GHG_MIN,
-    ghg_max: float = GHG_MAX,
+    value_min: float = GHG_MIN,
+    value_max: float = GHG_MAX,
+    target_field_path: Optional[List[str]] = None,
 ) -> Optional[dict]:
+    """
+    Validate and normalise one product.  Returns None if the product should be
+    dropped; otherwise returns a dict with keys: target, category, materials,
+    circularity_origin_pct, recycling_pct, hazardous_pct, inert_pct,
+    incineration_pct, raw.
+
+    target_field_path: JSON key path to the target value
+        (e.g. ["ghg_footprint", "total_ghg"]).  Defaults to the legacy GHG path.
+    value_min / value_max: hard filter bounds on the raw target value.
+    """
+    if target_field_path is None:
+        target_field_path = _DEFAULT_FIELD_PATH
+
     if str(product.get("reference_unit", "")).strip().lower() != "kg":
         return None
 
@@ -56,13 +79,13 @@ def normalize_product(
     if category not in cat_index:
         return None
 
-    ghg = None
+    target_val = None
     if require_target:
-        ghg_raw = (product.get("ghg_footprint") or {}).get(TARGET_FIELD)
-        ghg = safe_float(ghg_raw)
-        if ghg is None:
+        raw_val = _get_field(product, target_field_path)
+        target_val = safe_float(raw_val)
+        if target_val is None:
             return None
-        if ghg < ghg_min or ghg > ghg_max:
+        if target_val < value_min or target_val > value_max:
             return None
 
     materials = _get_materials(product)
@@ -94,7 +117,7 @@ def normalize_product(
         return None
 
     return {
-        "ghg":       ghg,
+        "target":    target_val,
         "category":  category,
         "materials": cleaned_materials,
         "raw":       product,
@@ -102,7 +125,16 @@ def normalize_product(
     }
 
 
-def filter_valid_products(products: list, cat_index: Dict[str, int]) -> list:
+def filter_valid_products(
+    products: list,
+    cat_index: Dict[str, int],
+    value_min: float = GHG_MIN,
+    value_max: float = GHG_MAX,
+    target_field_path: Optional[List[str]] = None,
+) -> list:
+    if target_field_path is None:
+        target_field_path = _DEFAULT_FIELD_PATH
+
     out = []
     skipped_category = skipped_target = skipped_materials = skipped_other = 0
 
@@ -112,12 +144,18 @@ def filter_valid_products(products: list, cat_index: Dict[str, int]) -> list:
             skipped_category += 1
             continue
 
-        c = normalize_product(p, cat_index, require_target=True, ghg_min=GHG_MIN, ghg_max=GHG_MAX)
+        c = normalize_product(
+            p, cat_index,
+            require_target=True,
+            value_min=value_min,
+            value_max=value_max,
+            target_field_path=target_field_path,
+        )
         if c is None:
-            ghg_raw   = (p.get("ghg_footprint") or {}).get(TARGET_FIELD)
-            ghg       = safe_float(ghg_raw)
-            materials = _get_materials(p)
-            if ghg is None or not (GHG_MIN <= ghg <= GHG_MAX):
+            raw_val    = _get_field(p, target_field_path)
+            target_val = safe_float(raw_val)
+            materials  = _get_materials(p)
+            if target_val is None or not (value_min <= target_val <= value_max):
                 skipped_target += 1
             elif not materials:
                 skipped_materials += 1
@@ -130,8 +168,8 @@ def filter_valid_products(products: list, cat_index: Dict[str, int]) -> list:
     print("Product validation summary:")
     print(f"  Valid products                  : {len(out)}")
     print(f"  Skipped (low-count category)    : {skipped_category}")
-    print(f"  Skipped (target GHG)            : {skipped_target}"
-          f"  (missing, invalid, or outside [{GHG_MIN}, {GHG_MAX}])")
+    print(f"  Skipped (target value)          : {skipped_target}"
+          f"  (missing, invalid, or outside [{value_min}, {value_max}])")
     print(f"  Skipped (materials)             : {skipped_materials}")
     print(f"  Skipped (other)                 : {skipped_other}")
     print(f"  Total skipped                   : {total_skipped}")

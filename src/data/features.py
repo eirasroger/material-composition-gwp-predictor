@@ -27,6 +27,6 @@ def build_features(
         ], dtype=np.float32) / 100.0
 
         X.append(np.concatenate([mat_emb, cat_emb, circ_feats]))
-        y.append(item["ghg"])
+        y.append(item["target"])
         categories.append(item["category"])
     return np.asarray(X, dtype=np.float32), np.asarray(y, dtype=np.float32), categories

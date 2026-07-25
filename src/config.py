@@ -34,12 +34,71 @@ CUSTOM_VEC_PATH   = BASE_DIR / "custom_vectors.vec"
 
 # ── Output paths ──────────────────────────────────────────────────────────────
 FIGURES_DIR        = BASE_DIR / "figures"
+MODELS_DIR         = BASE_DIR / "models"
 
-MODEL_PATH         = BASE_DIR / "ghg_model.pt"
+MODEL_PATH         = BASE_DIR / "ghg_model.pt"          # legacy desktop-app path
 DIAGNOSTICS_PATH   = BASE_DIR / "diagnostics_ghg.json"
 TRAINING_PLOT_PATH = FIGURES_DIR / "training_curves_ghg.png"
 PRED_SCATTER_PATH  = FIGURES_DIR / "pred_vs_actual_ghg.png"
 RESIDUALS_PATH     = FIGURES_DIR / "residuals_ghg.png"
+
+# ── Target registry ───────────────────────────────────────────────────────────
+# Each entry is fully self-describing.  Add new impact categories here only;
+# the pipeline, trainer, evaluator, and plots are domain-agnostic.
+#
+# field_path   : list of JSON keys to navigate from the product root
+# value_min/max: hard filter on the raw target value
+# transform    : "log1p" (non-negative targets) or "signed_log1p" (mixed sign)
+# thresholds   : absolute error thresholds for the "within ±X" diagnostic metric
+# unit         : displayed on plot axes and diagnostics
+# display_name : human-readable label
+TARGET_CONFIGS: dict = {
+    "ghg_total": {
+        "field_path":   ["ghg_footprint", "total_ghg"],
+        "value_min":    0.0,
+        "value_max":    10.0,
+        "transform":    "log1p",
+        "thresholds":   [0.5, 1.0, 2.0, 5.0],
+        "unit":         "kg CO2-eq/kg",
+        "display_name": "GHG Total",
+    },
+    "ghg_a1a3": {
+        "field_path":   ["ghg_footprint", "ghg_A1_A3"],
+        "value_min":    0.0,
+        "value_max":    10.0,
+        "transform":    "log1p",
+        "thresholds":   [0.5, 1.0, 2.0, 5.0],
+        "unit":         "kg CO2-eq/kg",
+        "display_name": "GHG A1-A3",
+    },
+    "ghg_c3": {
+        "field_path":   ["ghg_footprint", "ghg_C3"],
+        "value_min":    0.0,
+        "value_max":    5.0,
+        "transform":    "log1p",
+        "thresholds":   [0.05, 0.1, 0.25, 0.5],
+        "unit":         "kg CO2-eq/kg",
+        "display_name": "GHG C3",
+    },
+    "ghg_c4": {
+        "field_path":   ["ghg_footprint", "ghg_C4"],
+        "value_min":    0.0,
+        "value_max":    2.0,
+        "transform":    "log1p",
+        "thresholds":   [0.01, 0.05, 0.1, 0.25],
+        "unit":         "kg CO2-eq/kg",
+        "display_name": "GHG C4",
+    },
+    "ghg_d": {
+        "field_path":   ["ghg_footprint", "ghg_D"],
+        "value_min":    -10.0,
+        "value_max":    2.0,
+        "transform":    "signed_log1p",
+        "thresholds":   [0.05, 0.1, 0.5, 1.0],
+        "unit":         "kg CO2-eq/kg",
+        "display_name": "GHG D (avoided burden)",
+    },
+}
 
 # ── Model hyperparameters ─────────────────────────────────────────────────────
 EMBED_DIM          = 300

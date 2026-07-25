@@ -218,6 +218,11 @@ docs/
 # Files
 dataset.json
 diagnostics_ghg.json
+diagnostics_ghg_a1a3.json
+diagnostics_ghg_c3.json
+diagnostics_ghg_c4.json
+diagnostics_ghg_d.json
+diagnostics_ghg_total.json
 CLAUDE.md
 
 # Generated at build time by build.ps1 — never commit the real version string.
