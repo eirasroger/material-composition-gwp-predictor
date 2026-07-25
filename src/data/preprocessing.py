@@ -79,6 +79,14 @@ def normalize_product(
     if category not in cat_index:
         return None
 
+    category_std = str(product.get("category_standardized", "")).strip()
+
+    # Coalesced category: use the official PCR when reported, otherwise fall
+    # back to the (always-populated) LLM-standardized category. "has_pcr"
+    # is kept as an explicit feature so that signal isn't lost by coalescing.
+    has_pcr          = category not in ("", "N/A")
+    category_resolved = category if has_pcr else category_std
+
     target_val = None
     if require_target:
         raw_val = _get_field(product, target_field_path)
@@ -117,10 +125,13 @@ def normalize_product(
         return None
 
     return {
-        "target":    target_val,
-        "category":  category,
-        "materials": cleaned_materials,
-        "raw":       product,
+        "target":            target_val,
+        "category":          category,
+        "category_std":      category_std,
+        "category_resolved": category_resolved,
+        "has_pcr":           has_pcr,
+        "materials":         cleaned_materials,
+        "raw":               product,
         **circ_feats,
     }
 

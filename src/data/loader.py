@@ -28,15 +28,17 @@ def filter_reference_unit_kg(products: list) -> list:
     return filtered
 
 
-def build_category_index(products: list, min_count: int = MIN_CATEGORY_COUNT) -> Dict[str, int]:
+def build_category_index(
+    products: list, min_count: int = MIN_CATEGORY_COUNT, field: str = "c_pcr"
+) -> Dict[str, int]:
     counts = Counter(
-        str(p.get("c_pcr", "")).strip()
+        str(p.get(field, "")).strip()
         for p in products
-        if str(p.get("c_pcr", "")).strip()
+        if str(p.get(field, "")).strip()
     )
 
     print(f"\n{chr(9472) * 54}")
-    print(f"  Category distribution ({len(counts)} unique categories found)")
+    print(f"  '{field}' distribution ({len(counts)} unique categories found)")
     print(f"{chr(9472) * 54}")
     print(f"  {'Category':<32}  {'Count':>6}  Status")
     print(f"  {chr(9472) * 32}  {chr(9472) * 6}  {chr(9472) * 20}")

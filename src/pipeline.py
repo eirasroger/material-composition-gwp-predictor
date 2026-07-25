@@ -102,6 +102,22 @@ def run(target_key: str = "ghg_total"):
     cat_index = build_category_index(products, min_count=MIN_CATEGORY_COUNT)
     print(f"Active categories ({len(cat_index)}): {sorted(cat_index.keys())}")
 
+    std_cat_index = build_category_index(
+        products, min_count=MIN_CATEGORY_COUNT, field="category_standardized"
+    )
+    print(f"Active standardized categories ({len(std_cat_index)}): {sorted(std_cat_index.keys())}")
+
+    # Coalesced category vocabulary: real PCR labels (N/A excluded -- it is
+    # not a category, it is the absence of one) unioned with standardized
+    # labels. Each product's feature fires exactly one slot: its PCR if
+    # reported, else its standardized category (see normalize_product).
+    unified_cat_index = {
+        label: i for i, label in enumerate(
+            sorted((set(cat_index) - {"N/A", ""}) | set(std_cat_index))
+        )
+    }
+    print(f"Unified (coalesced) categories ({len(unified_cat_index)}): {sorted(unified_cat_index.keys())}")
+
     valid_products = filter_valid_products(
         products, cat_index,
         value_min=value_min,
@@ -129,15 +145,19 @@ def run(target_key: str = "ghg_total"):
     vocab = get_vocab(valid_products)
     print(f"\nVocabulary loaded: {len(vocab):,}")
 
-    n_categories = len(cat_index)
-    input_dim    = EMBED_DIM + n_categories + N_CIRC_FEATURES
+    n_categories     = len(cat_index)
+    n_std_categories = len(std_cat_index)
+    n_unified        = len(unified_cat_index)
+    input_dim        = EMBED_DIM + n_unified + 1 + N_CIRC_FEATURES
     print(
         f"Input dimension: {EMBED_DIM} (material embedding) "
-        f"+ {n_categories} (category one-hot) "
+        f"+ {n_unified} (coalesced category one-hot) "
+        f"+ 1 (has_pcr flag) "
         f"+ {N_CIRC_FEATURES} (circularity features) = {input_dim}"
     )
 
-    X, y, categories_all = build_features(valid_products, vocab, cat_index)
+    X, y, categories_all = build_features(valid_products, vocab, unified_cat_index)
+    categories_resolved_all = [p["category_resolved"] for p in valid_products]
     print(f"Feature matrix shape: {X.shape}")
     print(f"Products used for training: {len(y)}")
 
@@ -178,8 +198,10 @@ def run(target_key: str = "ghg_total"):
     best_seed             = None
     best_test_res         = None
     best_test_cats        = None
+    best_test_cats_resolved = None
     best_example_idx      = None
     all_cat_signed_errors: dict = defaultdict(list)
+    all_resolved_cat_signed_errors: dict = defaultdict(list)
 
     for seed in SEEDS:
         print(f"\n{'=' * 58}")
@@ -225,6 +247,10 @@ def run(target_key: str = "ghg_total"):
         for pred, actual, cat in zip(test_res["preds"], test_res["actuals"], test_cats):
             all_cat_signed_errors[cat].append(float(pred) - float(actual))
 
+        test_cats_resolved = [categories_resolved_all[i] for i in idx_te]
+        for pred, actual, cat in zip(test_res["preds"], test_res["actuals"], test_cats_resolved):
+            all_resolved_cat_signed_errors[cat].append(float(pred) - float(actual))
+
         print(
             f"\nSeed {seed}: val MAE={val_res['mae']:.4f}  "
             f"test MAE={test_res['mae']:.4f}  test R²={test_res['r2_sample']:.4f}"
@@ -248,6 +274,7 @@ def run(target_key: str = "ghg_total"):
             best_seed        = seed
             best_test_res    = test_res
             best_test_cats   = test_cats
+            best_test_cats_resolved = test_cats_resolved
             best_example_idx = idx_te[0]
 
     # ── Per-category error bounds (aggregated across all seeds) ──────────────
@@ -255,6 +282,15 @@ def run(target_key: str = "ghg_total"):
     for cat, errors in all_cat_signed_errors.items():
         arr = np.array(errors, dtype=np.float32)
         category_error_bounds[cat] = {
+            "p25": float(np.percentile(arr, 25)),
+            "p75": float(np.percentile(arr, 75)),
+            "n":   len(arr),
+        }
+
+    resolved_category_error_bounds = {}
+    for cat, errors in all_resolved_cat_signed_errors.items():
+        arr = np.array(errors, dtype=np.float32)
+        resolved_category_error_bounds[cat] = {
             "p25": float(np.percentile(arr, 25)),
             "p75": float(np.percentile(arr, 75)),
             "n":   len(arr),
@@ -307,6 +343,14 @@ def run(target_key: str = "ghg_total"):
         best_test_res["actuals"], best_test_res["preds"], best_test_cats,
         value_min=value_min, value_max=value_max, thresholds=thresholds,
     )
+    print("\n(above grouped by raw c_pcr -- 'N/A' row is products with no reported PCR)")
+
+    per_cat_resolved_metrics = print_category_metrics(
+        best_test_res["actuals"], best_test_res["preds"], best_test_cats_resolved,
+        value_min=value_min, value_max=value_max, thresholds=thresholds,
+    )
+    print("\n(above grouped by coalesced category -- PCR if reported, else standardized category)")
+
     print_worst_predictions(
         best_test_res["actuals"], best_test_res["preds"], best_test_cats, n=10
     )
@@ -326,6 +370,8 @@ def run(target_key: str = "ghg_total"):
             "hidden_dims":           HIDDEN_DIMS,
             "dropout":               DROPOUT,
             "cat_index":             cat_index,
+            "std_cat_index":         std_cat_index,
+            "unified_cat_index":     unified_cat_index,
             "input_dim":             input_dim,
             "transform_type":        transform,
             "target_key":            target_key,
@@ -335,6 +381,7 @@ def run(target_key: str = "ghg_total"):
             "unit":                  unit,
             "display_name":          display_name,
             "category_error_bounds": category_error_bounds,
+            "resolved_category_error_bounds": resolved_category_error_bounds,
         },
         str(model_path),
     )
@@ -349,9 +396,13 @@ def run(target_key: str = "ghg_total"):
         "valid_products":         len(valid_products),
         "vocab_size":             len(vocab),
         "n_categories":           n_categories,
+        "n_std_categories":       n_std_categories,
+        "n_unified_categories":   n_unified,
         "n_circularity_features": N_CIRC_FEATURES,
         "input_dim":              input_dim,
         "categories":             sorted(cat_index.keys()),
+        "std_categories":         sorted(std_cat_index.keys()),
+        "unified_categories":     sorted(unified_cat_index.keys()),
         "value_min":              value_min,
         "value_max":              value_max,
         "transform":              transform,
@@ -368,6 +419,7 @@ def run(target_key: str = "ghg_total"):
             "r2_sample":    best_test_res["r2_sample"],
             **{k: v for k, v in best_test_res.items() if k.startswith("within_")},
             "per_category": per_cat_metrics,
+            "per_category_resolved": per_cat_resolved_metrics,
         },
         "multi_seed_summary": {
             "test_mae_mean": float(np.mean(test_maes)),

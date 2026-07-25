@@ -41,6 +41,8 @@ class LoadedModel:
     input_dim: int
     transform_type: str = "log1p"
     category_error_bounds: Optional[Dict[str, Dict]] = field(default=None)
+    std_cat_index: Optional[Dict[str, int]] = field(default=None)
+    unified_cat_index: Optional[Dict[str, int]] = field(default=None)
 
 
 def load_model(checkpoint: Union[str, Path] = MODEL_PATH) -> LoadedModel:
@@ -62,6 +64,8 @@ def load_model(checkpoint: Union[str, Path] = MODEL_PATH) -> LoadedModel:
         input_dim=int(ckpt["input_dim"]),
         transform_type=ckpt.get("transform_type", "log1p"),
         category_error_bounds=ckpt.get("category_error_bounds"),
+        std_cat_index=ckpt.get("std_cat_index"),
+        unified_cat_index=ckpt.get("unified_cat_index"),
     )
 
 
@@ -81,7 +85,6 @@ def predict_ghg_with_loaded(
         )
 
     mat_emb    = product_embedding(normalized["materials"], vocab)
-    cat_emb    = category_onehot(normalized["category"], loaded.cat_index)
     circ_feats = np.array([
         normalized["circularity_origin_pct"],
         normalized["recycling_pct"],
@@ -90,9 +93,18 @@ def predict_ghg_with_loaded(
         normalized["incineration_pct"],
     ], dtype=np.float32) / 100.0
 
-    x = torch.tensor(
-        np.concatenate([mat_emb, cat_emb, circ_feats]), dtype=torch.float32
-    ).unsqueeze(0)
+    if loaded.unified_cat_index is not None:
+        # Coalesced encoding: PCR if reported, else standardized category,
+        # plus an explicit has_pcr flag. Must mirror normalize_product's
+        # category_resolved/has_pcr derivation exactly.
+        cat_emb = category_onehot(normalized["category_resolved"], loaded.unified_cat_index)
+        has_pcr = np.array([1.0 if normalized["has_pcr"] else 0.0], dtype=np.float32)
+        blocks  = [mat_emb, cat_emb, has_pcr, circ_feats]
+    else:
+        cat_emb = category_onehot(normalized["category"], loaded.cat_index)
+        blocks  = [mat_emb, cat_emb, circ_feats]
+
+    x = torch.tensor(np.concatenate(blocks), dtype=torch.float32).unsqueeze(0)
 
     with torch.no_grad():
         pred_scaled = loaded.model(x).item()
