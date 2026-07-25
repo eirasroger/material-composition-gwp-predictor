@@ -253,17 +253,18 @@ def run(target_key: str = "ghg_total"):
 
         print(
             f"\nSeed {seed}: val MAE={val_res['mae']:.4f}  "
-            f"test MAE={test_res['mae']:.4f}  test R²={test_res['r2_sample']:.4f}"
+            f"test MAE={test_res['mae']:.4f}  test MedAE={test_res['medae']:.4f}  "
+            f"test Bias={test_res['bias']:+.4f}"
         )
 
         seed_results.append({
-            "seed":           seed,
-            "val_mae":        val_res["mae"],
-            "test_mae":       test_res["mae"],
-            "test_rmse":      test_res["rmse"],
-            "test_nrmse":     test_res["nrmse"],
-            "test_r2_range":  test_res["r2_range"],
-            "test_r2_sample": test_res["r2_sample"],
+            "seed":       seed,
+            "val_mae":    val_res["mae"],
+            "test_mae":   test_res["mae"],
+            "test_medae": test_res["medae"],
+            "test_bias":  test_res["bias"],
+            "test_rmse":  test_res["rmse"],
+            "test_nrmse": test_res["nrmse"],
             **{k: v for k, v in test_res.items() if k.startswith("within_")},
         })
 
@@ -282,23 +283,26 @@ def run(target_key: str = "ghg_total"):
     for cat, errors in all_cat_signed_errors.items():
         arr = np.array(errors, dtype=np.float32)
         category_error_bounds[cat] = {
-            "p25": float(np.percentile(arr, 25)),
-            "p75": float(np.percentile(arr, 75)),
-            "n":   len(arr),
+            "mean": float(np.mean(arr)),
+            "p25":  float(np.percentile(arr, 25)),
+            "p75":  float(np.percentile(arr, 75)),
+            "n":    len(arr),
         }
 
     resolved_category_error_bounds = {}
     for cat, errors in all_resolved_cat_signed_errors.items():
         arr = np.array(errors, dtype=np.float32)
         resolved_category_error_bounds[cat] = {
-            "p25": float(np.percentile(arr, 25)),
-            "p75": float(np.percentile(arr, 75)),
-            "n":   len(arr),
+            "mean": float(np.mean(arr)),
+            "p25":  float(np.percentile(arr, 25)),
+            "p75":  float(np.percentile(arr, 75)),
+            "n":    len(arr),
         }
 
     # ── Multi-seed summary ────────────────────────────────────────────────────
-    test_maes = [r["test_mae"]       for r in seed_results]
-    test_r2s  = [r["test_r2_sample"] for r in seed_results]
+    test_maes   = [r["test_mae"]   for r in seed_results]
+    test_medaes = [r["test_medae"] for r in seed_results]
+    test_biases = [r["test_bias"]  for r in seed_results]
 
     print(f"\n{'=' * 58}")
     print(f"  MULTI-SEED SUMMARY  ({len(SEEDS)} seeds)")
@@ -307,11 +311,13 @@ def run(target_key: str = "ghg_total"):
         marker = "  <-- saved" if r["seed"] == best_seed else ""
         print(
             f"  seed {r['seed']}: val MAE={r['val_mae']:.4f}  "
-            f"test MAE={r['test_mae']:.4f}  R²={r['test_r2_sample']:.4f}{marker}"
+            f"test MAE={r['test_mae']:.4f}  MedAE={r['test_medae']:.4f}  "
+            f"Bias={r['test_bias']:+.4f}{marker}"
         )
     print(f"  {'─' * 54}")
-    print(f"  Test MAE : {np.mean(test_maes):.4f} ± {np.std(test_maes):.4f}")
-    print(f"  Test R²  : {np.mean(test_r2s):.4f} ± {np.std(test_r2s):.4f}")
+    print(f"  Test MAE   : {np.mean(test_maes):.4f} ± {np.std(test_maes):.4f}")
+    print(f"  Test MedAE : {np.mean(test_medaes):.4f} ± {np.std(test_medaes):.4f}")
+    print(f"  Test Bias  : {np.mean(test_biases):+.4f} ± {np.std(test_biases):.4f}")
     print(f"{'=' * 58}")
 
     # ── Full reporting for best seed ──────────────────────────────────────────
@@ -323,10 +329,10 @@ def run(target_key: str = "ghg_total"):
     print("=" * 50)
     print(f"  Target        {display_name}  [{unit}]")
     print(f"  MAE           {best_test_res['mae']:.4f}")
+    print(f"  MedAE         {best_test_res['medae']:.4f}")
+    print(f"  Bias          {best_test_res['bias']:+.4f}  (mean predicted - actual; +over / -under)")
     print(f"  RMSE          {best_test_res['rmse']:.4f}")
     print(f"  NRMSE         {best_test_res['nrmse']:.4f}  (fraction of [{value_min}, {value_max}] range)")
-    print(f"  R2 (range)    {best_test_res['r2_range']:.6f}")
-    print(f"  R2 (sample)   {best_test_res['r2_sample']:.4f}")
     for t in thresholds:
         key = f"within_{t}"
         print(f"  Within ±{t:<6} {best_test_res[key]:.1f}%")
@@ -413,19 +419,21 @@ def run(target_key: str = "ghg_total"):
         "seed_results":           seed_results,
         "test_metrics": {
             "mae":          best_test_res["mae"],
+            "medae":        best_test_res["medae"],
+            "bias":         best_test_res["bias"],
             "rmse":         best_test_res["rmse"],
             "nrmse":        best_test_res["nrmse"],
-            "r2_range":     best_test_res["r2_range"],
-            "r2_sample":    best_test_res["r2_sample"],
             **{k: v for k, v in best_test_res.items() if k.startswith("within_")},
             "per_category": per_cat_metrics,
             "per_category_resolved": per_cat_resolved_metrics,
         },
         "multi_seed_summary": {
-            "test_mae_mean": float(np.mean(test_maes)),
-            "test_mae_std":  float(np.std(test_maes)),
-            "test_r2_mean":  float(np.mean(test_r2s)),
-            "test_r2_std":   float(np.std(test_r2s)),
+            "test_mae_mean":   float(np.mean(test_maes)),
+            "test_mae_std":    float(np.std(test_maes)),
+            "test_medae_mean": float(np.mean(test_medaes)),
+            "test_medae_std":  float(np.std(test_medaes)),
+            "test_bias_mean":  float(np.mean(test_biases)),
+            "test_bias_std":   float(np.std(test_biases)),
         },
         "history": best_history,
     }

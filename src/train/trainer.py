@@ -10,7 +10,6 @@ import torch.nn as nn
 from sklearn.metrics import mean_absolute_error
 
 from src.config import EPOCHS, LR, PATIENCE, WEIGHT_DECAY
-from src.utils import r2_safe
 
 
 def train_model(
@@ -37,9 +36,9 @@ def train_model(
     patience_ctr = 0
     best_state   = None
 
-    history = {"epoch": [], "train_loss": [], "val_loss": [], "val_mae": [], "val_r2": []}
+    history = {"epoch": [], "train_loss": [], "val_loss": [], "val_mae": [], "val_medae": []}
 
-    print(f"\n{'Epoch':>6}  {'Train Loss':>12}  {'Val Loss':>10}  {'Val MAE':>10}  {'Val R2':>8}")
+    print(f"\n{'Epoch':>6}  {'Train Loss':>12}  {'Val Loss':>10}  {'Val MAE':>10}  {'Val MedAE':>10}")
     print("-" * 58)
 
     for epoch in range(1, EPOCHS + 1):
@@ -69,8 +68,8 @@ def train_model(
         preds   = inverse_fn(np.asarray(preds_s)   * scaler_y_scale + scaler_y_mean)
         actuals = inverse_fn(np.asarray(actuals_s)  * scaler_y_scale + scaler_y_mean)
 
-        v_mae = mean_absolute_error(actuals, preds)
-        v_r2  = r2_safe(actuals, preds)
+        v_mae   = mean_absolute_error(actuals, preds)
+        v_medae = float(np.median(np.abs(actuals - preds)))
 
         sched.step(v_loss)
 
@@ -78,9 +77,9 @@ def train_model(
         history["train_loss"].append(float(t_loss))
         history["val_loss"].append(float(v_loss))
         history["val_mae"].append(float(v_mae))
-        history["val_r2"].append(float(v_r2) if np.isfinite(v_r2) else float("nan"))
+        history["val_medae"].append(v_medae)
 
-        print(f"{epoch:>6}  {t_loss:>12.4f}  {v_loss:>10.4f}  {v_mae:>10.4f}  {v_r2:>8.4f}")
+        print(f"{epoch:>6}  {t_loss:>12.4f}  {v_loss:>10.4f}  {v_mae:>10.4f}  {v_medae:>10.4f}")
 
         if v_loss < best_val - 1e-5:
             best_val     = v_loss

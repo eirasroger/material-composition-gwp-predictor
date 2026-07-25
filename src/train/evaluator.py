@@ -12,9 +12,6 @@ from typing import Callable, Dict, List, Optional
 
 import numpy as np
 import torch
-from sklearn.metrics import mean_absolute_error
-
-from src.utils import r2_safe
 
 
 def evaluate_model(
@@ -50,20 +47,19 @@ def evaluate_model(
     actuals = inverse_fn(np.asarray(actuals_s,  dtype=np.float32) * scaler_y_scale + scaler_y_mean)
 
     target_range = value_max - value_min
-    mae          = float(mean_absolute_error(actuals, preds))
-    rmse         = float(math.sqrt(np.mean((actuals - preds) ** 2)))
-    nrmse        = rmse / target_range if target_range > 0 else float("nan")
-    ss_res       = float(np.sum((actuals - preds) ** 2))
-    ss_range     = float(len(actuals) * target_range ** 2)
-    r2_range     = float(1.0 - ss_res / ss_range) if ss_range > 0 else float("nan")
-    r2_sample    = r2_safe(actuals, preds)
+    signed_err   = preds - actuals
+    abs_err      = np.abs(signed_err)
 
-    abs_err = np.abs(actuals - preds)
-    within  = {f"within_{t}": float(np.mean(abs_err <= t) * 100) for t in thresholds}
+    mae          = float(np.mean(abs_err))
+    medae        = float(np.median(abs_err))
+    bias         = float(np.mean(signed_err))
+    rmse         = float(math.sqrt(np.mean(signed_err ** 2)))
+    nrmse        = rmse / target_range if target_range > 0 else float("nan")
+
+    within = {f"within_{t}": float(np.mean(abs_err <= t) * 100) for t in thresholds}
 
     return {
-        "mae": mae, "rmse": rmse, "nrmse": nrmse,
-        "r2_range": r2_range, "r2_sample": r2_sample,
+        "mae": mae, "medae": medae, "bias": bias, "rmse": rmse, "nrmse": nrmse,
         **within,
         "preds": preds, "actuals": actuals,
     }
@@ -80,7 +76,6 @@ def print_category_metrics(
     if thresholds is None:
         thresholds = [0.5, 1.0, 2.0]
 
-    target_range = value_max - value_min
     cat_data: Dict[str, list] = defaultdict(list)
     for a, p, c in zip(actuals, preds, categories):
         cat_data[c].append((a, p))
@@ -91,10 +86,10 @@ def print_category_metrics(
     print("  Per-category test metrics")
     print(f"{chr(9472) * (72 + col_w)}")
     print(
-        f"  {'Category':<28}  {'N':>5}  {'MAE':>8}  {'RMSE':>8}  "
-        f"{'NRMSE':>7}  {th_headers}"
+        f"  {'Category':<28}  {'N':>5}  {'MAE':>8}  {'MedAE':>8}  "
+        f"{'Bias':>8}  {th_headers}"
     )
-    sep = f"  {chr(9472)*28}  {chr(9472)*5}  {chr(9472)*8}  {chr(9472)*8}  {chr(9472)*7}  " + \
+    sep = f"  {chr(9472)*28}  {chr(9472)*5}  {chr(9472)*8}  {chr(9472)*8}  {chr(9472)*8}  " + \
           "  ".join(chr(9472)*6 for _ in thresholds)
     print(sep)
 
@@ -104,19 +99,19 @@ def print_category_metrics(
         n     = len(pairs)
         a_arr = np.array([x[0] for x in pairs])
         p_arr = np.array([x[1] for x in pairs])
-        mae   = float(mean_absolute_error(a_arr, p_arr))
-        rmse  = float(math.sqrt(np.mean((a_arr - p_arr) ** 2)))
-        nrmse = rmse / target_range if target_range > 0 else float("nan")
         ae    = np.abs(a_arr - p_arr)
+        mae   = float(np.mean(ae))
+        medae = float(np.median(ae))
+        bias  = float(np.mean(p_arr - a_arr))
         within_vals = [float(np.mean(ae <= t) * 100) for t in thresholds]
 
         within_str = "  ".join(f"{w:>5.1f}%" for w in within_vals)
         print(
-            f"  {cat:<28}  {n:>5}  {mae:>8.4f}  {rmse:>8.4f}  "
-            f"{nrmse:>7.4f}  {within_str}"
+            f"  {cat:<28}  {n:>5}  {mae:>8.4f}  {medae:>8.4f}  "
+            f"{bias:>+8.4f}  {within_str}"
         )
         per_cat[cat] = {
-            "n": n, "mae": mae, "rmse": rmse, "nrmse": nrmse,
+            "n": n, "mae": mae, "medae": medae, "bias": bias,
             **{f"within_{t}": w for t, w in zip(thresholds, within_vals)},
         }
 

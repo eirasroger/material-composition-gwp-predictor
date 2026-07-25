@@ -43,16 +43,6 @@ def tokenise_material(text: str) -> List[str]:
     return [t for t in tokens if t not in STOP_WORDS]
 
 
-def r2_safe(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    if len(y_true) < 2:
-        return float("nan")
-    ss_res = np.sum((y_true - y_pred) ** 2)
-    ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
-    if ss_tot == 0:
-        return float("nan")
-    return float(1.0 - ss_res / ss_tot)
-
-
 def normalise_shares_to_100(values: List[float]) -> List[float]:
     total = sum(values)
     if total <= 0:
