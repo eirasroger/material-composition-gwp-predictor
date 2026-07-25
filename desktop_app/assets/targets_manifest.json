@@ -2,121 +2,121 @@
   "adpf_a1a3": {
     "indicator_key": "adpf",
     "stage_key": "a1a3",
-    "display_name": "Fossil Depletion A1-A3",
+    "display_name": "Abiotic depletion potential: fossil (A1-A3)",
     "unit": "MJ/kg"
   },
   "adpf_c3": {
     "indicator_key": "adpf",
     "stage_key": "c3",
-    "display_name": "Fossil Depletion C3",
+    "display_name": "Abiotic depletion potential: fossil (C3)",
     "unit": "MJ/kg"
   },
   "adpf_c4": {
     "indicator_key": "adpf",
     "stage_key": "c4",
-    "display_name": "Fossil Depletion C4",
+    "display_name": "Abiotic depletion potential: fossil (C4)",
     "unit": "MJ/kg"
   },
   "adpf_d": {
     "indicator_key": "adpf",
     "stage_key": "d",
-    "display_name": "Fossil Depletion D (avoided burden)",
+    "display_name": "Abiotic depletion potential: fossil (D, avoided burden)",
     "unit": "MJ/kg"
   },
   "adpf_total": {
     "indicator_key": "adpf",
     "stage_key": "total",
-    "display_name": "Fossil Depletion Total",
+    "display_name": "Abiotic depletion potential: fossil (total)",
     "unit": "MJ/kg"
   },
   "ap_a1a3": {
     "indicator_key": "ap",
     "stage_key": "a1a3",
-    "display_name": "Acidification A1-A3",
+    "display_name": "Acidification potential (A1-A3)",
     "unit": "kg SO2-eq/kg"
   },
   "ap_c3": {
     "indicator_key": "ap",
     "stage_key": "c3",
-    "display_name": "Acidification C3",
+    "display_name": "Acidification potential (C3)",
     "unit": "kg SO2-eq/kg"
   },
   "ap_c4": {
     "indicator_key": "ap",
     "stage_key": "c4",
-    "display_name": "Acidification C4",
+    "display_name": "Acidification potential (C4)",
     "unit": "kg SO2-eq/kg"
   },
   "ap_d": {
     "indicator_key": "ap",
     "stage_key": "d",
-    "display_name": "Acidification D (avoided burden)",
+    "display_name": "Acidification potential (D, avoided burden)",
     "unit": "kg SO2-eq/kg"
   },
   "ap_total": {
     "indicator_key": "ap",
     "stage_key": "total",
-    "display_name": "Acidification Total",
+    "display_name": "Acidification potential (total)",
     "unit": "kg SO2-eq/kg"
   },
   "ep_a1a3": {
     "indicator_key": "ep",
     "stage_key": "a1a3",
-    "display_name": "Eutrophication A1-A3",
+    "display_name": "Eutrophication potential (A1-A3)",
     "unit": "kg PO4-eq/kg"
   },
   "ep_c3": {
     "indicator_key": "ep",
     "stage_key": "c3",
-    "display_name": "Eutrophication C3",
+    "display_name": "Eutrophication potential (C3)",
     "unit": "kg PO4-eq/kg"
   },
   "ep_c4": {
     "indicator_key": "ep",
     "stage_key": "c4",
-    "display_name": "Eutrophication C4",
+    "display_name": "Eutrophication potential (C4)",
     "unit": "kg PO4-eq/kg"
   },
   "ep_d": {
     "indicator_key": "ep",
     "stage_key": "d",
-    "display_name": "Eutrophication D (avoided burden)",
+    "display_name": "Eutrophication potential (D, avoided burden)",
     "unit": "kg PO4-eq/kg"
   },
   "ep_total": {
     "indicator_key": "ep",
     "stage_key": "total",
-    "display_name": "Eutrophication Total",
+    "display_name": "Eutrophication potential (total)",
     "unit": "kg PO4-eq/kg"
   },
   "fw_a1a3": {
     "indicator_key": "fw",
     "stage_key": "a1a3",
-    "display_name": "Water Depletion A1-A3",
+    "display_name": "Water depletion potential (A1-A3)",
     "unit": "m3/kg"
   },
   "fw_c3": {
     "indicator_key": "fw",
     "stage_key": "c3",
-    "display_name": "Water Depletion C3",
+    "display_name": "Water depletion potential (C3)",
     "unit": "m3/kg"
   },
   "fw_c4": {
     "indicator_key": "fw",
     "stage_key": "c4",
-    "display_name": "Water Depletion C4",
+    "display_name": "Water depletion potential (C4)",
     "unit": "m3/kg"
   },
   "fw_d": {
     "indicator_key": "fw",
     "stage_key": "d",
-    "display_name": "Water Depletion D (avoided burden)",
+    "display_name": "Water depletion potential (D, avoided burden)",
     "unit": "m3/kg"
   },
   "fw_total": {
     "indicator_key": "fw",
     "stage_key": "total",
-    "display_name": "Water Depletion Total",
+    "display_name": "Water depletion potential (total)",
     "unit": "m3/kg"
   },
   "ghg_a1a3": {

@@ -49,7 +49,10 @@ _DPI          = 100
 _BAR_H        = 8.0    # bar chart subplot height in inches
 _ROW_H        = 0.26   # height per summary row in inches
 _LABEL_W      = 1.3    # x-units reserved for the label column (negative x side)
-_LEFT_MARGIN  = 0.10   # figure left margin fraction (space for y-axis label)
+# Wide enough for the longest tick label the indicators produce: eutrophication
+# ticks read "0.000175", which shoves the rotated axis label off the canvas at
+# the 0.10 this used to be.
+_LEFT_MARGIN  = 0.17   # figure left margin fraction (space for y-axis label)
 _RIGHT_MARGIN = 0.97   # figure right margin fraction
 _CHAR_WIDTH_IN = 0.00425
 
@@ -96,6 +99,9 @@ class ComparisonPanel(ctk.CTkFrame):
         # ── lifecycle breakdown (collapsed by default, mirrors PredictionPanel) ──
         self._products: List[ProductResult] = []
         self._breakdown_expanded = False
+        # Opens itself as soon as there is something to show. Sticky once the
+        # user hides it, so it does not keep re-opening on every keystroke.
+        self._breakdown_user_collapsed = False
         self._breakdown_fig: Optional[Figure] = None
         self._breakdown_ax = None
         self._breakdown_canvas: Optional[FigureCanvasTkAgg] = None
@@ -149,8 +155,11 @@ class ComparisonPanel(ctk.CTkFrame):
 
         has_breakdown = any(p.breakdown for p in products)
         self._breakdown_toggle.configure(state="normal" if has_breakdown else "disabled")
-        if not has_breakdown and self._breakdown_expanded:
-            self._set_breakdown_expanded(False)
+        if not has_breakdown:
+            if self._breakdown_expanded:
+                self._set_breakdown_expanded(False)
+        elif not self._breakdown_expanded and not self._breakdown_user_collapsed:
+            self._set_breakdown_expanded(True)
         elif self._breakdown_expanded:
             self._draw_breakdown_comparison()
 
@@ -192,11 +201,22 @@ class ComparisonPanel(ctk.CTkFrame):
     # ── bar chart subplot ─────────────────────────────────────────────────────
 
     def _draw_bars(self, ax, products, x_left, x_right) -> None:
-        uppers  = [p.bounds[1] for p in products if p.bounds is not None]
-        raw_max = max(uppers) if uppers else max(p.value for p in products)
-        y_max   = max(raw_max * 1.20, 1.0)
+        # Scale to the data actually on screen. A fixed floor here (it used to be
+        # `max(..., 1.0)`) is unit-specific: 1.0 is a sane axis for kg CO2-eq/kg
+        # but pins every eutrophication bar (~1e-4) to an invisible sliver.
+        values  = [p.value for p in products]
+        uppers  = [p.bounds[1] for p in products if p.bounds is not None] + values
+        lowers  = [p.bounds[0] for p in products if p.bounds is not None] + values
+        raw_max = max(uppers)
+        raw_min = min(lowers)
 
-        label_zone = y_max * 0.07
+        # Bars are read by length, so the axis must include zero — never crop the
+        # baseline to magnify a small difference.
+        y_max = raw_max * 1.20 if raw_max > 0 else 1.0
+        y_min = min(0.0, raw_min * 1.20)
+        span  = (y_max - y_min) or 1.0
+
+        label_zone = span * 0.07
 
         for i, p in enumerate(products):
             ax.bar(
@@ -212,15 +232,15 @@ class ComparisonPanel(ctk.CTkFrame):
                     fmt="none", color=p.color,
                     capsize=6, elinewidth=1.5, capthick=1.5, zorder=3,
                 )
-            ann_y = (p.bounds[1] if p.bounds else p.value) + y_max * 0.025
+            ann_y = (p.bounds[1] if p.bounds else p.value) + span * 0.025
             ax.text(
                 i, ann_y, _fmt(p.value),
                 ha="center", va="bottom",
                 color=p.color, fontsize=10, fontweight="bold",
             )
-            # Product name drawn inside the negative zone, below the x-axis line
+            # Product name drawn in the reserved strip below the baseline
             ax.text(
-                i, -label_zone * 0.52,
+                i, y_min - label_zone * 0.52,
                 p.name[:14],
                 ha="center", va="center",
                 color=p.color, fontsize=10.5, fontweight="bold",
@@ -229,7 +249,7 @@ class ComparisonPanel(ctk.CTkFrame):
         ax.axhline(0, color=BORDER, linewidth=1.0, zorder=1)
 
         ax.set_xlim(x_left, x_right)
-        ax.set_ylim(-label_zone, y_max)
+        ax.set_ylim(y_min - label_zone, y_max)
         ax.set_xticks([])
         ax.set_ylabel(self._unit, color=TEXT_SEC, fontsize=10, labelpad=4)
         ax.tick_params(axis="y", colors=TEXT_SEC, labelsize=10)
@@ -365,7 +385,9 @@ class ComparisonPanel(ctk.CTkFrame):
     # ── lifecycle breakdown ────────────────────────────────────────────────────
 
     def _toggle_breakdown(self) -> None:
-        self._set_breakdown_expanded(not self._breakdown_expanded)
+        expanded = not self._breakdown_expanded
+        self._breakdown_user_collapsed = not expanded
+        self._set_breakdown_expanded(expanded)
 
     def _set_breakdown_expanded(self, expanded: bool) -> None:
         self._breakdown_expanded = expanded
@@ -412,7 +434,10 @@ class ComparisonPanel(ctk.CTkFrame):
         group_w = 0.8
         bar_w   = group_w / max(n_prod, 1)
         all_vals = [s["value"] for p in products for s in p.breakdown]
-        pad = 0.04 * max(1.0, max((abs(v) for v in all_vals), default=1.0))
+        pad = 0.04 * max((abs(v) for v in all_vals), default=1.0)
+        # A number on every bar is unreadable past a couple of products
+        # (4 products x 5 stages = 20 labels). The y-axis carries it instead.
+        label_bars = n_prod <= 2
 
         for pi, p in enumerate(products):
             by_stage = {s["stage_key"]: s for s in p.breakdown}
@@ -432,12 +457,13 @@ class ComparisonPanel(ctk.CTkFrame):
                     x, v, yerr=[[err_lo], [err_hi]], fmt="none",
                     ecolor=p.color, elinewidth=1, capsize=2.5, zorder=3,
                 )
-                label_y = v + err_hi + pad if v >= 0 else v - err_lo - pad
-                ax.text(
-                    x, label_y, _fmt(v), ha="center",
-                    va="bottom" if v >= 0 else "top",
-                    color=TEXT_PRI, fontsize=7,
-                )
+                if label_bars:
+                    label_y = v + err_hi + pad if v >= 0 else v - err_lo - pad
+                    ax.text(
+                        x, label_y, _fmt(v), ha="center",
+                        va="bottom" if v >= 0 else "top",
+                        color=TEXT_PRI, fontsize=7,
+                    )
 
         ax.axhline(0, color=BORDER, linewidth=1, zorder=1)
         ax.set_xticks(range(n_stages))

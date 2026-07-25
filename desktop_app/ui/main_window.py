@@ -290,7 +290,9 @@ class MainWindow(ctk.CTk):
             panel = PredictionPanel(
                 self._right_container,
                 color=PRODUCT_COLORS[0],
-                display_name=entry["display_name"],
+                # Full indicator name, not the manifest's terse "GHG Total" —
+                # the manifest name stays as-is for diagnostics and plots.
+                display_name=indicator_label(self._current_indicator).lower(),
                 unit=entry["unit"],
                 value_min=loaded.value_min,
                 value_max=loaded.value_max,
@@ -327,12 +329,16 @@ class MainWindow(ctk.CTk):
                 if target_key is None or target_key not in snap["all_preds"]:
                     continue
                 entry = self.adapter.manifest[target_key]
+                value = snap["all_preds"][target_key]
                 readings.append(IndicatorReading(
                     indicator_key=indicator,
-                    value=snap["all_preds"][target_key],
+                    value=value,
                     unit=entry["unit"],
                     display_name=entry["display_name"],
                     ref=self.adapter.reference(snap["category"], target_key=target_key),
+                    bounds=self.adapter.prediction_range(
+                        value, snap["category"], target_key=target_key
+                    ),
                 ))
             if readings:
                 products.append(SummaryProduct(

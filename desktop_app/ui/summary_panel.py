@@ -19,10 +19,18 @@ The shaded band is that category's p25-p75 — the range normal products occupy.
 It carries the uncertainty visually: a narrow band means composition barely
 moves this indicator here, a wide one means it dominates.
 
-1 product  -> one large radar.
-2-4        -> small multiples, each against its own category's band. Never
-              overlaid: cards can carry different categories, so a shared axis
-              would not mean the same thing for each polygon.
+1 product           -> one radar.
+2-4, same category  -> one radar, overlaid, with a legend. The axes mean the
+                       same thing for every product, so one band and one ring
+                       serve all of them.
+2-4, mixed category -> small multiples, each against its own band. Overlaying
+                       here would put polygons on an axis that does not mean
+                       the same thing for each.
+
+Deliberately NOT drawn: the outer rim circle and radial ("median" / "10x")
+labels. The rim is where the log scale is clamped, not a value in the data, and
+labelling it invites "10x what?". The ring and band are explained once in the
+subtitle instead, in words.
 """
 
 from __future__ import annotations
@@ -38,10 +46,12 @@ matplotlib.use("TkAgg")  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
+from matplotlib.lines import Line2D  # noqa: E402
 
 from desktop_app.ui.theme import (
     ACCENT, BORDER, SURFACE, TEXT_DIM, TEXT_PRI, TEXT_SEC, font,
-    fmt_value as _fmt_value, indicator_label, indicator_sort_key,
+    fmt_value as _fmt_value, indicator_axis_label, indicator_label,
+    indicator_sort_key, status_vs_typical,
 )
 
 # Radial extent, in decades either side of the category median.
@@ -59,6 +69,9 @@ class IndicatorReading:
     # Reference distribution (desktop_app.inference_adapter.Reference) or None
     # when this target has no usable median to divide by.
     ref: Optional[object] = None
+    # (low, high) plausible range for this prediction. Used to hedge the verdict
+    # when the model cannot settle which side of typical the product is on.
+    bounds: Optional[tuple] = None
 
 
 @dataclass
@@ -67,6 +80,11 @@ class SummaryProduct:
     color: str
     category: str
     readings: List[IndicatorReading]
+
+
+def _sorted(product: "SummaryProduct") -> List["IndicatorReading"]:
+    """Readings in canonical indicator order — the axes must never move."""
+    return sorted(product.readings, key=lambda r: indicator_sort_key(r.indicator_key))
 
 
 def _norm_radius(ratio: float) -> float:
@@ -143,12 +161,24 @@ class SummaryPanel(ctk.CTkFrame):
             return
 
         n = len(products)
-        if n == 1:
-            fig = Figure(figsize=(5.0, 4.8), dpi=_DPI)
+        categories = list(dict.fromkeys(p.category for p in products))
+        shared_category = len(categories) == 1
+
+        if n == 1 or shared_category:
+            fig = Figure(figsize=(5.0, 5.4 if n == 1 else 5.8), dpi=_DPI)
             fig.patch.set_facecolor(SURFACE)
-            self._draw_radar(fig.add_subplot(111, polar=True), products[0], big=True)
-            fig.subplots_adjust(left=0.13, right=0.87, top=0.92, bottom=0.06)
-            cats = products[0].category
+            ax = fig.add_subplot(111, polar=True)
+            theta, closed = self._draw_frame(ax, _sorted(products[0]), big=True)
+            for p in products:
+                self._draw_polygon(ax, p, theta, closed, big=True)
+            if n > 1:
+                self._add_legend(fig, products)
+            # Axis labels are two lines for the long names and sit outside the
+            # axes box, so the top margin has to clear them.
+            fig.subplots_adjust(
+                left=0.15, right=0.85, top=0.86, bottom=0.15 if n > 1 else 0.08,
+            )
+            cats = categories[0]
         else:
             cols = 2
             rows = int(math.ceil(n / cols))
@@ -156,14 +186,17 @@ class SummaryPanel(ctk.CTkFrame):
             fig.patch.set_facecolor(SURFACE)
             for i, p in enumerate(products):
                 ax = fig.add_subplot(rows, cols, i + 1, polar=True)
-                self._draw_radar(ax, p, big=False)
+                theta, closed = self._draw_frame(ax, _sorted(p), big=False)
+                self._draw_polygon(ax, p, theta, closed, big=False)
+                ax.set_title(
+                    p.name[:16], color=p.color, fontsize=9, fontweight="bold", pad=10,
+                )
             # Generous top: each subplot carries its product name as a title,
             # which sits above the axes box and is clipped by a tighter margin.
             fig.subplots_adjust(
                 left=0.08, right=0.92, top=0.86, bottom=0.04, wspace=0.45, hspace=0.50,
             )
-            uniq = list(dict.fromkeys(p.category for p in products))
-            cats = uniq[0] if len(uniq) == 1 else f"{len(uniq)} different categories"
+            cats = f"each product's own category ({len(categories)} different)"
 
         self._subtitle.configure(
             text=(
@@ -184,14 +217,15 @@ class SummaryPanel(ctk.CTkFrame):
 
     # ── radar ─────────────────────────────────────────────────────────────────
 
-    def _draw_radar(self, ax, product: SummaryProduct, big: bool) -> None:
-        readings = sorted(
-            product.readings, key=lambda r: indicator_sort_key(r.indicator_key)
-        )
+    def _draw_frame(self, ax, readings: List[IndicatorReading], big: bool):
+        """
+        Axes, typical-range band and median ring — everything that is context
+        rather than data. Shared by every product drawn on this ax.
+        """
         n = len(readings)
         if n < 3:
             ax.set_axis_off()
-            return
+            return np.array([]), np.array([])
 
         theta = np.linspace(0, 2 * np.pi, n, endpoint=False)
         closed = np.concatenate([theta, theta[:1]])
@@ -203,14 +237,20 @@ class SummaryPanel(ctk.CTkFrame):
         ax.set_yticks([])
         ax.set_xticks(theta)
         ax.set_xticklabels(
-            [indicator_label(r.indicator_key) for r in readings],
-            color=TEXT_SEC, fontsize=9 if big else 7.5,
+            [indicator_axis_label(r.indicator_key) for r in readings],
+            color=TEXT_SEC, fontsize=8.5 if big else 7,
         )
-        ax.tick_params(pad=6 if big else 2)
+        ax.tick_params(pad=10 if big else 4)
+        # The rim is kept as a faint frame: it gives the sense of how far a
+        # polygon is from the extreme. It is labelled in words ("10x worse")
+        # rather than as a bare number, which read as data and invited
+        # "10x what?".
         ax.spines["polar"].set_color(BORDER)
+        ax.spines["polar"].set_linewidth(1.0)
         ax.grid(False)
 
-        # Typical range (p25-p75) — neutral, recessive: it is context, not a series.
+        # Typical range (p25-p75): one soft fill, no outline. Neutral ink —
+        # it is context, not a series.
         lo, hi, has_band = [], [], False
         for r in readings:
             if r.ref is None:
@@ -221,40 +261,55 @@ class SummaryPanel(ctk.CTkFrame):
             lo.append(_norm_radius(r.ref.p25 / r.ref.p50))
             hi.append(_norm_radius(r.ref.p75 / r.ref.p50))
         if has_band:
-            lo_c = np.concatenate([lo, lo[:1]])
-            hi_c = np.concatenate([hi, hi[:1]])
             ax.fill_between(
-                closed, lo_c, hi_c,
-                color=TEXT_DIM, alpha=0.22, linewidth=0, zorder=1,
+                closed,
+                np.concatenate([lo, lo[:1]]),
+                np.concatenate([hi, hi[:1]]),
+                color=TEXT_DIM, alpha=0.25, linewidth=0, zorder=1,
             )
-            # Hairline edges: in wide-spread categories the fill alone covers most
-            # of the disc and loses its boundary.
-            for edge in (lo_c, hi_c):
-                ax.plot(closed, edge, color=TEXT_DIM, linewidth=0.8, alpha=0.85, zorder=1)
 
-        # Median ring — the reference the whole chart is read against. Drawn
-        # through the same 5 vertices as the data (not a true circle) so a
-        # product exactly at the median lies exactly on it.
-        ring = np.full_like(closed, _MEDIAN_R)
-        ax.plot(closed, ring, color=TEXT_SEC, linewidth=1.0, alpha=0.85, zorder=2)
+        # Median ring — the one reference line. Drawn through the same vertices
+        # as the data (not a true circle) so a product exactly at the median
+        # lies exactly on it.
+        ax.plot(
+            closed, np.full_like(closed, _MEDIAN_R),
+            color=TEXT_SEC, linewidth=1.0, alpha=0.85, zorder=2,
+        )
 
-        # Radial scale, on the gap between the first two axes so it never
-        # collides with an axis label or a vertex.
+        # Scale ends, in words. The axis is symmetric in log — the centre is the
+        # mirror of the rim (10x better vs 10x worse) — and neither end is
+        # readable without saying so. Placed on the gap between the first two
+        # axes so they never sit on a spoke or a vertex.
         if big:
-            gap_theta = float(theta[0] + (theta[1] - theta[0]) / 2)
-            for radius, text in ((_MEDIAN_R, "median"), (1.0, f"{10 ** _DECADES:.0f}×")):
-                ax.text(
-                    gap_theta, radius, text,
-                    color=TEXT_SEC, fontsize=7.5, ha="center", va="center", zorder=7,
-                    # Opaque plate: these sit on top of the ring and the band
-                    # edges, which otherwise strike straight through the text.
-                    bbox=dict(
-                        boxstyle="round,pad=0.22", facecolor=SURFACE,
-                        edgecolor="none", alpha=0.92,
-                    ),
-                )
+            gap = float(theta[0] + (theta[1] - theta[0]) / 2)
+            plate = dict(
+                boxstyle="round,pad=0.25", facecolor=SURFACE,
+                edgecolor="none", alpha=0.9,
+            )
+            factor = f"{10 ** _DECADES:.0f}"
+            ax.text(
+                gap, 1.0, f"{factor}× worse", color=TEXT_DIM, fontsize=7.5,
+                ha="center", va="center", zorder=7, bbox=plate,
+            )
+            ax.text(
+                gap, 0.045, f"{factor}× better", color=TEXT_DIM, fontsize=7.5,
+                ha="center", va="center", zorder=7, bbox=plate,
+            )
+        return theta, closed
 
-        # The product itself.
+    def _draw_polygon(
+        self, ax, product: SummaryProduct, theta, closed, big: bool,
+    ) -> None:
+        """
+        Outline only, never filled — identically for one product or four. A fill
+        was previously used in the single-product case, which made the one- and
+        many-product views look like different charts, and filled polygons turn
+        to mud as soon as they overlap.
+        """
+        if theta.size == 0:
+            return
+        readings = _sorted(product)
+
         radii, off_scale = [], []
         for r in readings:
             if r.ref is None:
@@ -267,7 +322,6 @@ class SummaryPanel(ctk.CTkFrame):
 
         closed_r = np.concatenate([radii, radii[:1]])
         ax.plot(closed, closed_r, color=product.color, linewidth=2.0, zorder=4)
-        ax.fill(closed, closed_r, color=product.color, alpha=0.22, zorder=3)
         ax.scatter(
             theta, radii, s=34 if big else 18, color=product.color,
             edgecolors=SURFACE, linewidths=1.5, zorder=5,
@@ -281,11 +335,17 @@ class SummaryPanel(ctk.CTkFrame):
                     color=product.color, edgecolors=SURFACE, linewidths=1.0, zorder=6,
                 )
 
-        if not big:
-            ax.set_title(
-                product.name[:16], color=product.color,
-                fontsize=9, fontweight="bold", pad=10,
-            )
+    def _add_legend(self, fig: Figure, products: List[SummaryProduct]) -> None:
+        """Overlaid polygons are only tellable apart by colour — so a legend is required."""
+        handles = [
+            Line2D([], [], color=p.color, linewidth=2.0, label=p.name[:18])
+            for p in products
+        ]
+        fig.legend(
+            handles=handles, loc="lower center", ncol=min(len(products), 2),
+            frameon=False, fontsize=9, labelcolor=TEXT_SEC,
+            bbox_to_anchor=(0.5, 0.0),
+        )
 
     # ── native-value table ────────────────────────────────────────────────────
 
@@ -327,25 +387,43 @@ class SummaryPanel(ctk.CTkFrame):
             unit = next(
                 (lk[ind].unit for lk in by_product if ind in lk), ""
             )
+            cell = ctk.CTkFrame(self._table, fg_color="transparent")
+            cell.grid(row=row0 + ri, column=0, sticky="w", pady=3)
             ctk.CTkLabel(
-                self._table,
-                text=f"{indicator_label(ind)}\n{unit}",
-                font=font(11), text_color=TEXT_SEC,
-                anchor="w", justify="left",
-            ).grid(row=row0 + ri, column=0, sticky="w", pady=2)
+                cell, text=indicator_label(ind), font=font(11),
+                text_color=TEXT_SEC, anchor="w", justify="left", wraplength=170,
+            ).pack(anchor="w")
+            ctk.CTkLabel(
+                cell, text=unit, font=font(10),
+                text_color=TEXT_DIM, anchor="w", justify="left",
+            ).pack(anchor="w")
 
             for ci, lookup in enumerate(by_product):
                 reading = lookup.get(ind)
+                box = ctk.CTkFrame(self._table, fg_color="transparent")
+                box.grid(row=row0 + ri, column=ci + 1, sticky="e", padx=(10, 0), pady=3)
                 if reading is None:
-                    text = "—"
-                else:
-                    text = _fmt_value(reading.value)
-                    if reading.ref is not None:
-                        text += f"\n{reading.ref.ratio(reading.value):.2g}× median"
+                    ctk.CTkLabel(
+                        box, text="—", font=font(11), text_color=TEXT_DIM, anchor="e",
+                    ).pack(anchor="e")
+                    continue
                 ctk.CTkLabel(
-                    self._table, text=text, font=font(11),
-                    text_color=TEXT_PRI, anchor="e", justify="right",
-                ).grid(row=row0 + ri, column=ci + 1, sticky="e", padx=(10, 0), pady=2)
+                    box, text=_fmt_value(reading.value), font=font(11),
+                    text_color=TEXT_PRI, anchor="e",
+                ).pack(anchor="e")
+                if reading.ref is not None:
+                    # Colour-code against the same p25/p75 the radar shades, so
+                    # a red row here always corresponds to a vertex outside the
+                    # band up there.
+                    lo, hi = reading.bounds if reading.bounds else (None, None)
+                    _, short, colour = status_vs_typical(
+                        reading.value, reading.ref.p25, reading.ref.p75, lo, hi,
+                    )
+                    ctk.CTkLabel(
+                        box,
+                        text=f"{reading.ref.ratio(reading.value):.2g}× median · {short}",
+                        font=font(11, "bold"), text_color=colour, anchor="e",
+                    ).pack(anchor="e")
 
         scopes = {
             r.ref.scope for p in products for r in p.readings if r.ref is not None

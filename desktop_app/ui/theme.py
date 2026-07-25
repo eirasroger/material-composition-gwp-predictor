@@ -47,6 +47,58 @@ SUM_GREEN  = (ACCENT, ACCENT)
 SUM_AMBER  = ("#d49b3a", "#d49b3a")
 SUM_RED    = ("#d44a4a", "#d44a4a")
 
+# Status ink — reserved for "how does this compare to typical", never for a
+# product. STATUS_GOOD is deliberately NOT ACCENT: ACCENT is PRODUCT_COLORS[0],
+# so a green status word beside a green Product 1 label would read as identity
+# rather than as a verdict.
+STATUS_GOOD    = "#2f9e6b"
+STATUS_BAD     = "#d44a4a"
+STATUS_NEUTRAL = TEXT_PRI
+# Softened variants for a claim the prediction's own error range cannot settle.
+STATUS_GOOD_SOFT = "#4f8f75"
+STATUS_BAD_SOFT  = "#a35c5c"
+
+
+def status_vs_typical(
+    value: float,
+    p25: float,
+    p75: float,
+    low: float | None = None,
+    high: float | None = None,
+) -> tuple[str, str, str]:
+    """
+    (wording, short wording, colour) for a value against its category's middle 50%.
+
+    The thresholds are the same p25/p75 the radar draws as its shaded band, so
+    the words and the picture always agree — as opposed to a hand-picked
+    "within 0.8-1.25x", which could call a product typical while the chart drew
+    it outside the band.
+
+    ``low``/``high`` are the prediction's own plausible range. When they straddle
+    the threshold the model cannot actually settle the claim, so the wording is
+    hedged ("likely worse") and the colour softened — measured on real products,
+    that is 50-60% of the time, and full-strength colour therefore comes to mean
+    the model is genuinely confident. Omit them to judge on the point estimate.
+
+    Always show the wording next to the colour. Each indicator has its own
+    spread, so the cut-offs differ per row: for concrete, GHG turns red at
+    1.44x but water not until 2.34x. Colour alone makes "1.5x red, 1.9x
+    neutral" look like a bug instead of the two different distributions it is.
+    """
+    if value > p75:
+        certain = low is None or low > p75
+        if certain:
+            return "worse than typical", "worse", STATUS_BAD
+        return "likely worse than typical", "likely worse", STATUS_BAD_SOFT
+    if value < p25:
+        certain = high is None or high < p25
+        if certain:
+            return "better than typical", "better", STATUS_GOOD
+        return "likely better than typical", "likely better", STATUS_GOOD_SOFT
+    # Inside the band, "typical" is already the non-committal reading — hedging
+    # it further ("likely typical") says nothing extra.
+    return "typical", "typical", STATUS_NEUTRAL
+
 # Lifecycle-stage display order (EN 15804-ish) and one fixed colour per stage,
 # reused everywhere a stage breakdown is drawn so a stage always reads the
 # same regardless of indicator or view. Unknown stage_keys fall back to
@@ -66,15 +118,27 @@ STAGE_COLORS = {
 STAGE_FALLBACK_COLOR = TEXT_SEC
 
 # Indicator display order — fixed, because the summary radar's shape is only
-# comparable between products if the axes never move. Short labels keep the
-# pentagon legible; the manifest's display_name is too long for an axis.
+# comparable between products if the axes never move.
 INDICATOR_ORDER = ["ghg", "fw", "ep", "ap", "adpf"]
-INDICATOR_LABELS = {
-    "ghg":  "GHG",
-    "fw":   "Water",
-    "ep":   "Eutroph.",
-    "ap":   "Acidif.",
-    "adpf": "Fossil",
+
+# Full names for the dropdown, panel headers and the values table. No reason to
+# abbreviate where there is room.
+INDICATOR_NAMES = {
+    "ghg":  "Greenhouse gas emissions",
+    "fw":   "Water depletion potential",
+    "ep":   "Eutrophication potential",
+    "ap":   "Acidification potential",
+    "adpf": "Abiotic depletion potential: fossil",
+}
+
+# Radar axes only. Five full names around a pentagon collide, so they wrap;
+# these are the same names, not abbreviations.
+INDICATOR_AXIS_LABELS = {
+    "ghg":  "Greenhouse gas\nemissions",
+    "fw":   "Water depletion\npotential",
+    "ep":   "Eutrophication\npotential",
+    "ap":   "Acidification\npotential",
+    "adpf": "Abiotic depletion\npotential: fossil",
 }
 
 
@@ -86,7 +150,11 @@ def indicator_sort_key(indicator_key: str) -> tuple:
 
 
 def indicator_label(indicator_key: str) -> str:
-    return INDICATOR_LABELS.get(indicator_key, indicator_key.upper())
+    return INDICATOR_NAMES.get(indicator_key, indicator_key.upper())
+
+
+def indicator_axis_label(indicator_key: str) -> str:
+    return INDICATOR_AXIS_LABELS.get(indicator_key, indicator_label(indicator_key))
 
 
 # Short axis labels for lifecycle stages. Derived from stage_key, not by

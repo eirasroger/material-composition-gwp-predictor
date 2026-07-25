@@ -27,6 +27,7 @@ from matplotlib.figure import Figure  # noqa: E402
 from desktop_app.ui.theme import (
     ACCENT, BORDER, SURFACE, TEXT_SEC, TEXT_DIM, TEXT_PRI, font,
     fmt_value as _fmt, stage_color, stage_label, stage_sort_key,
+    status_vs_typical,
 )
 
 
@@ -71,16 +72,24 @@ class PredictionPanel(ctk.CTkFrame):
         divider.pack(fill="x", padx=24, pady=(0, 16))
 
         # ── matplotlib gauge ──────────────────────────────────────────────────
+        caption_row = ctk.CTkFrame(self, fg_color="transparent")
+        caption_row.pack(anchor="w", fill="x", padx=24)
+        # Verdict is its own bold, colour-coded label; the rest stays dim so the
+        # verdict is what the eye lands on.
+        self._verdict_label = ctk.CTkLabel(
+            caption_row, text="", font=font(12, "bold"),
+            text_color=TEXT_PRI, anchor="w",
+        )
+        self._verdict_label.pack(side="left")
         self._gauge_caption = ctk.CTkLabel(
-            self,
+            caption_row,
             text="Compared with real products",
             font=font(11),
             text_color=TEXT_DIM,
             anchor="w",
             justify="left",
-            wraplength=420,
         )
-        self._gauge_caption.pack(anchor="w", fill="x", padx=24)
+        self._gauge_caption.pack(side="left", padx=(6, 0))
 
         self._fig = Figure(figsize=(4.4, 1.1), dpi=100)
         self._fig.patch.set_facecolor(SURFACE)
@@ -119,6 +128,9 @@ class PredictionPanel(ctk.CTkFrame):
         # ── lifecycle breakdown (collapsed by default) ───────────────────────────
         self._breakdown_data: "list[dict] | None" = None
         self._breakdown_expanded = False
+        # Opens itself as soon as there is something to show. Sticky once the
+        # user hides it, so it does not keep re-opening on every keystroke.
+        self._breakdown_user_collapsed = False
         self._breakdown_fig = None
         self._breakdown_canvas = None
 
@@ -189,25 +201,37 @@ class PredictionPanel(ctk.CTkFrame):
         self._reference = reference
         self._value_label.configure(text=f"{_fmt(value)} {self._unit}")
         if bounds is not None:
+            # Not a full confidence interval: it is the p25-p75 of this
+            # category's residuals, so name it for what it is.
             self._range_label.configure(
-                text=f"Plausible range: {_fmt(bounds[0])} – {_fmt(bounds[1])} {self._unit}"
+                text=(
+                    f"Middle 50% of likely values: "
+                    f"{_fmt(bounds[0])} – {_fmt(bounds[1])} {self._unit}"
+                )
             )
         else:
             self._range_label.configure(text="")
 
         if reference is not None:
-            ratio = reference.ratio(value)
-            verdict = (
-                "about typical" if 0.8 <= ratio <= 1.25
-                else ("below typical" if ratio < 0.8 else "above typical")
+            # Thresholds are the category's own middle 50%, the same band the
+            # gauge and the summary radar shade — so the wording can never
+            # contradict the picture. The prediction's own range decides whether
+            # the claim is stated outright or hedged.
+            low, high = bounds if bounds else (None, None)
+            wording, _, colour = status_vs_typical(
+                value, reference.p25, reference.p75, low, high,
             )
-            self._gauge_caption.configure(
-                text=(
-                    f"{ratio:.2g}× the median — {verdict}. "
-                    f"Compared with {reference.label}."
+            ratio_text = f"{reference.ratio(value):.2g}× median"
+            if bounds is not None:
+                ratio_text += (
+                    f" ({reference.ratio(bounds[0]):.2g}–{reference.ratio(bounds[1]):.2g}×)"
                 )
+            self._verdict_label.configure(
+                text=f"{ratio_text} — {wording}", text_color=colour,
             )
+            self._gauge_caption.configure(text=f"vs. {reference.label}")
         else:
+            self._verdict_label.configure(text="")
             self._gauge_caption.configure(
                 text=f"Position within trained range ({_fmt(self._value_min)} – {_fmt(self._value_max)})"
             )
@@ -217,8 +241,11 @@ class PredictionPanel(ctk.CTkFrame):
         self._breakdown_toggle.configure(
             state="normal" if self._breakdown_data else "disabled"
         )
-        if self._breakdown_data is None and self._breakdown_expanded:
-            self._set_breakdown_expanded(False)
+        if self._breakdown_data is None:
+            if self._breakdown_expanded:
+                self._set_breakdown_expanded(False)
+        elif not self._breakdown_expanded and not self._breakdown_user_collapsed:
+            self._set_breakdown_expanded(True)
         elif self._breakdown_expanded:
             self._draw_breakdown()
 
@@ -226,6 +253,7 @@ class PredictionPanel(ctk.CTkFrame):
         self._value_label.configure(text=f"— {self._unit}")
         self._range_label.configure(text="")
         self._reference = None
+        self._verdict_label.configure(text="")
         self._gauge_caption.configure(text="Compared with real products")
         self._draw_gauge(None)
         self._breakdown_data = None
@@ -239,7 +267,9 @@ class PredictionPanel(ctk.CTkFrame):
     # ── lifecycle breakdown ───────────────────────────────────────────────────
 
     def _toggle_breakdown(self) -> None:
-        self._set_breakdown_expanded(not self._breakdown_expanded)
+        expanded = not self._breakdown_expanded
+        self._breakdown_user_collapsed = not expanded
+        self._set_breakdown_expanded(expanded)
 
     def _set_breakdown_expanded(self, expanded: bool) -> None:
         self._breakdown_expanded = expanded
