@@ -20,10 +20,14 @@ import tkinter as tk
 import customtkinter as ctk
 import matplotlib
 matplotlib.use("TkAgg")  # noqa: E402
+import matplotlib.patches  # noqa: E402
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
 
-from desktop_app.ui.theme import ACCENT, BORDER, BG, SURFACE, TEXT_DIM, TEXT_SEC, font
+from desktop_app.ui.theme import (
+    ACCENT, BORDER, BG, SURFACE, TEXT_DIM, TEXT_PRI, TEXT_SEC, font,
+    stage_sort_key,
+)
 
 
 @dataclass
@@ -36,6 +40,7 @@ class ProductResult:
     materials: List[Dict]           # normalised: [{"name": str, "percentage": float}]
     eol: Any                        # EolShares (normalised)
     origin_pct: float
+    breakdown: Optional[List[Dict]] = None   # per-stage [{stage_key, display_name, unit, value, bounds}]
 
 
 # ── layout constants ──────────────────────────────────────────────────────────
@@ -87,11 +92,63 @@ class ComparisonPanel(ctk.CTkFrame):
         self._fig: Optional[Figure] = None
         self._mpl_canvas: Optional[FigureCanvasTkAgg] = None
 
+        # ── lifecycle breakdown (collapsed by default, mirrors PredictionPanel) ──
+        self._products: List[ProductResult] = []
+        self._breakdown_expanded = False
+        self._breakdown_fig: Optional[Figure] = None
+        self._breakdown_ax = None
+        self._breakdown_canvas: Optional[FigureCanvasTkAgg] = None
+
+        self._breakdown_toggle = ctk.CTkButton(
+            self._scroll,
+            text="Show lifecycle breakdown  ▸",
+            font=font(11),
+            height=26,
+            fg_color="transparent",
+            border_width=1,
+            border_color=BORDER,
+            text_color=TEXT_SEC,
+            hover_color=BORDER,
+            command=self._toggle_breakdown,
+            state="disabled",
+        )
+        self._breakdown_toggle.pack(anchor="w", padx=12, pady=(8, 4))
+
+        self._breakdown_frame = ctk.CTkFrame(self._scroll, fg_color="transparent")
+        # not packed until expanded
+
+        ctk.CTkLabel(
+            self._breakdown_frame,
+            text=(
+                "Estimated from material composition only. Excludes transport, construction, "
+                "and use-phase impacts, which depend on process choices the model doesn't see."
+            ),
+            font=font(10),
+            text_color=TEXT_DIM,
+            justify="left",
+            anchor="w",
+            wraplength=_FIG_W * 96,
+        ).pack(anchor="w", padx=0, pady=(0, 6))
+
+        self._breakdown_canvas_host = tk.Frame(
+            self._breakdown_frame, highlightthickness=0, bd=0, bg=SURFACE,
+        )
+        self._breakdown_canvas_host.pack(fill="x", padx=12, pady=(0, 12))
+
         self._show_empty()
 
     # ── public ───────────────────────────────────────────────────────────────
 
     def update(self, products: List[ProductResult]) -> None:
+        self._products = list(products)
+
+        has_breakdown = any(p.breakdown for p in products)
+        self._breakdown_toggle.configure(state="normal" if has_breakdown else "disabled")
+        if not has_breakdown and self._breakdown_expanded:
+            self._set_breakdown_expanded(False)
+        elif self._breakdown_expanded:
+            self._draw_breakdown_comparison()
+
         if not products:
             self._show_empty()
             return
@@ -299,6 +356,109 @@ class ComparisonPanel(ctk.CTkFrame):
             })
 
         return rows
+
+    # ── lifecycle breakdown ────────────────────────────────────────────────────
+
+    def _toggle_breakdown(self) -> None:
+        self._set_breakdown_expanded(not self._breakdown_expanded)
+
+    def _set_breakdown_expanded(self, expanded: bool) -> None:
+        self._breakdown_expanded = expanded
+        if expanded:
+            self._breakdown_toggle.configure(text="Hide lifecycle breakdown  ▾")
+            self._breakdown_frame.pack(fill="x", pady=(0, 8))
+            self._draw_breakdown_comparison()
+        else:
+            self._breakdown_toggle.configure(text="Show lifecycle breakdown  ▸")
+            self._breakdown_frame.pack_forget()
+
+    def _draw_breakdown_comparison(self) -> None:
+        products = [p for p in self._products if p.breakdown]
+        if not products:
+            return
+
+        # Union of stage_keys across products, lifecycle-ordered; a product
+        # missing a given stage just has no bar in that stage's cluster.
+        stage_keys: List[str] = []
+        stage_labels: Dict[str, str] = {}
+        for p in products:
+            for s in p.breakdown:
+                if s["stage_key"] not in stage_labels:
+                    stage_labels[s["stage_key"]] = s["display_name"].replace("GHG ", "")
+                    stage_keys.append(s["stage_key"])
+        stage_keys.sort(key=stage_sort_key)
+        n_stages = len(stage_keys)
+        n_prod   = len(products)
+
+        if self._breakdown_fig is None:
+            self._breakdown_fig = Figure(figsize=(_FIG_W, 3.0), dpi=_DPI)
+            self._breakdown_fig.patch.set_facecolor(SURFACE)
+            self._breakdown_ax = self._breakdown_fig.add_subplot(111)
+            self._breakdown_canvas = FigureCanvasTkAgg(
+                self._breakdown_fig, master=self._breakdown_canvas_host
+            )
+            widget = self._breakdown_canvas.get_tk_widget()
+            widget.pack(fill="x")
+            widget.configure(bg=SURFACE, highlightthickness=0)
+
+        ax = self._breakdown_ax
+        ax.clear()
+
+        group_w = 0.8
+        bar_w   = group_w / max(n_prod, 1)
+        all_vals = [s["value"] for p in products for s in p.breakdown]
+        pad = 0.04 * max(1.0, max((abs(v) for v in all_vals), default=1.0))
+
+        for pi, p in enumerate(products):
+            by_stage = {s["stage_key"]: s for s in p.breakdown}
+            offset = (pi - (n_prod - 1) / 2) * bar_w
+            for si, sk in enumerate(stage_keys):
+                s = by_stage.get(sk)
+                if s is None:
+                    continue
+                x = si + offset
+                v = s["value"]
+                b = s.get("bounds")
+                err_lo = max(0.0, v - b[0]) if b else 0.0
+                err_hi = max(0.0, b[1] - v) if b else 0.0
+
+                ax.bar(x, v, width=bar_w * 0.88, color=p.color + "cc", edgecolor=p.color, linewidth=0.8, zorder=2)
+                ax.errorbar(
+                    x, v, yerr=[[err_lo], [err_hi]], fmt="none",
+                    ecolor=p.color, elinewidth=1, capsize=2.5, zorder=3,
+                )
+                label_y = v + err_hi + pad if v >= 0 else v - err_lo - pad
+                ax.text(
+                    x, label_y, f"{v:.2f}", ha="center",
+                    va="bottom" if v >= 0 else "top",
+                    color=TEXT_PRI, fontsize=7,
+                )
+
+        ax.axhline(0, color=BORDER, linewidth=1, zorder=1)
+        ax.set_xticks(range(n_stages))
+        ax.set_xticklabels([stage_labels[sk] for sk in stage_keys], color=TEXT_SEC, fontsize=9)
+        unit = products[0].breakdown[0].get("unit", "") if products[0].breakdown else ""
+        ax.set_ylabel(unit, color=TEXT_SEC, fontsize=8, labelpad=4)
+        ax.tick_params(colors=TEXT_SEC, labelsize=8, length=3)
+        ax.set_facecolor(SURFACE)
+        for spine in ("top", "right"):
+            ax.spines[spine].set_visible(False)
+        ax.spines["left"].set_color(BORDER)
+        ax.spines["bottom"].set_color(BORDER)
+
+        # Legend: product name -> color (colors already mean "product" in the
+        # chart above; repeated here since this chart is visually separate).
+        handles = [
+            matplotlib.patches.Patch(facecolor=p.color, edgecolor=p.color, label=p.name)
+            for p in products
+        ]
+        ax.legend(
+            handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.18),
+            ncol=min(n_prod, 4), frameon=False, fontsize=8, labelcolor=TEXT_SEC,
+        )
+
+        self._breakdown_fig.subplots_adjust(left=0.12, right=0.97, top=0.92, bottom=0.28)
+        self._breakdown_canvas.draw_idle()
 
     # ── canvas management ─────────────────────────────────────────────────────
 

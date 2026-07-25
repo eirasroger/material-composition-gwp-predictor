@@ -28,14 +28,30 @@ fitz_datas, fitz_binaries, fitz_hidden = collect_all("fitz")
 # Bundle the baked assets under "assets/" inside the frozen tree, so
 # inference_adapter._default_assets_dir() and splash._assets_dir() find them
 # via sys._MEIPASS / assets.
+#
+# models/*.pt is globbed rather than listed by filename: bake_assets.py bakes
+# one checkpoint per trained target (currently 5 GHG stages, more indicators
+# later per docs/LEARNINGS.md 2026-07-25) and the exact set changes as new
+# targets are trained. A fixed file list here would silently drop new targets
+# from the frozen build -- see docs/LEARNINGS.md 2026-05-09 for the bug this
+# caused before (a forgotten asset_files entry -> silent fallback at runtime).
+_model_checkpoints = sorted((APP_DIR / "assets" / "models").glob("*.pt"))
+if not _model_checkpoints:
+    raise FileNotFoundError(
+        f"No checkpoints in {APP_DIR / 'assets' / 'models'}. "
+        "Run desktop_app/tools/bake_assets.py before building."
+    )
+
 asset_files = [
-    (str(APP_DIR / "assets" / "ghg_model.pt"),              "assets"),
-    (str(APP_DIR / "assets" / "vocab.npz"),                  "assets"),
-    (str(APP_DIR / "assets" / "materials.json"),             "assets"),
-    (str(APP_DIR / "assets" / "category_materials.json"),    "assets"),
-    (str(APP_DIR / "assets" / "icon.ico"),                   "assets"),
-    (str(APP_DIR / "assets" / "icon_vector.svg"),            "assets"),
-    (str(APP_DIR / "assets" / "theme_dark.json"),            "assets"),
+    (str(p), "assets/models") for p in _model_checkpoints
+] + [
+    (str(APP_DIR / "assets" / "targets_manifest.json"),    "assets"),
+    (str(APP_DIR / "assets" / "vocab.npz"),                "assets"),
+    (str(APP_DIR / "assets" / "materials.json"),           "assets"),
+    (str(APP_DIR / "assets" / "category_materials.json"),  "assets"),
+    (str(APP_DIR / "assets" / "icon.ico"),                  "assets"),
+    (str(APP_DIR / "assets" / "icon_vector.svg"),           "assets"),
+    (str(APP_DIR / "assets" / "theme_dark.json"),           "assets"),
 ]
 
 a = Analysis(

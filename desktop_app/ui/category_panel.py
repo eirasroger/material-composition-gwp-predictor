@@ -16,6 +16,7 @@ class CategoryPanel(ctk.CTkFrame):
         master,
         categories: List[str],
         on_change: Optional[Callable[[Optional[str]], None]] = None,
+        sort: bool = True,
     ) -> None:
         super().__init__(master, fg_color=SURFACE, corner_radius=8)
         self._categories = list(categories)
@@ -28,15 +29,18 @@ class CategoryPanel(ctk.CTkFrame):
 
         ctk.CTkLabel(
             self,
-            text="Select the product category.",
+            text="Select the product category. PCR categories are listed first; "
+                 "\"Other\" entries are standardized categories for products with no formal PCR.",
             font=font(11),
             text_color=TEXT_SEC,
             anchor="w",
+            justify="left",
+            wraplength=380,
         ).pack(fill="x", padx=14, pady=(0, 6))
 
         self._dropdown = SearchableDropdown(
             self, values=self._categories, command=self._handle_select,
-            placeholder="Type to search ...",
+            placeholder="Type to search ...", sort=sort,
         )
         self._dropdown.pack(fill="x", padx=14, pady=(0, 14))
 

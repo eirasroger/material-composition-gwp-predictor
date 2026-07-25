@@ -103,6 +103,7 @@ class ProductCard(ctk.CTkFrame):
             override_frame,
             categories=adapter.categories,
             on_change=self._on_local_category_change,
+            sort=False,
         )
         # Starts hidden; shown when override is toggled on
 

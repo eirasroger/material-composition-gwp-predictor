@@ -1,10 +1,18 @@
 """
 Bake the assets shipped in the desktop installer:
 
-- ``vocab.npz``               embedding subset (only tokens needed by training-set materials)
+- ``vocab.npz``               embedding subset (union of tokens needed across every baked target)
 - ``materials.json``          material display strings sorted by global frequency
 - ``category_materials.json`` per-category material lists sorted by frequency within each category
-- ``ghg_model.pt``            copy of the trained checkpoint
+- ``models/{target_key}.pt``  copy of every trained checkpoint being baked
+- ``targets_manifest.json``   {target_key: {indicator_key, stage_key, display_name, unit}}, lets the
+                               app introspect available targets without loading every checkpoint
+
+By default bakes every target listed in TARGET_CONFIGS that has a trained
+checkpoint under models/. Currently that's all 5 GHG stages -- no other
+indicator has been trained yet (see docs/LEARNINGS.md 2026-07-25), so today
+this produces the same 5 targets regardless, but nothing here needs to change
+when a new indicator is added later.
 
 Run from anywhere::
 
@@ -12,9 +20,10 @@ Run from anywhere::
 
 Optional flags::
 
-    --out-dir   destination for assets (default: desktop_app/assets)
-    --model     trained checkpoint (default: src.config.MODEL_PATH)
-    --dataset   training dataset (default: src.config.DATASET_PATH)
+    --out-dir     destination for assets (default: desktop_app/assets)
+    --models-dir  directory of trained checkpoints (default: src.config.MODELS_DIR)
+    --targets     space-separated target keys to bake (default: all with a checkpoint present)
+    --dataset     training dataset (default: src.config.DATASET_PATH)
 """
 
 import argparse
@@ -23,42 +32,88 @@ import shutil
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
-
-import torch
+from typing import List, Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.config import DATASET_PATH, MODEL_PATH
+import torch
+
+from desktop_app.inference_adapter import STD_CATEGORY_PREFIX
+from src.config import DATASET_PATH, MODELS_DIR, TARGET_CONFIGS
 from src.data.loader import filter_reference_unit_kg, load_dataset
 from src.data.preprocessing import filter_valid_products
 from src.embeddings.baked import save_vocab_npz
 from src.embeddings.vocab import get_vocab
 
 
-def bake(model_path: Path, dataset_path: Path, out_dir: Path) -> None:
+def bake(
+    models_dir: Path,
+    dataset_path: Path,
+    out_dir: Path,
+    target_keys: Optional[List[str]] = None,
+) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
+    models_out_dir = out_dir / "models"
+    models_out_dir.mkdir(parents=True, exist_ok=True)
 
-    ckpt = torch.load(str(model_path), map_location="cpu", weights_only=False)
-    cat_index = ckpt["cat_index"]
-    print(f"Loaded cat_index from {model_path.name}: {len(cat_index)} categories")
+    available = {p.stem: p for p in models_dir.glob("*.pt")}
+    if target_keys is None:
+        target_keys = sorted(available)
+    missing = [k for k in target_keys if k not in available]
+    if missing:
+        raise FileNotFoundError(
+            f"No trained checkpoint for target(s) {missing} in {models_dir}. "
+            f"Train with: python main.py --target <key>"
+        )
+    if not target_keys:
+        raise FileNotFoundError(f"No trained checkpoints found in {models_dir}.")
+
+    print(f"Baking {len(target_keys)} target(s): {target_keys}")
 
     products = load_dataset(dataset_path)
     products = filter_reference_unit_kg(products)
-    valid = filter_valid_products(products, cat_index)
-    print(f"Valid products for asset baking: {len(valid)}")
 
+    manifest: dict = {}
     cat_counts: Counter = Counter()
     cat_mat_counts: defaultdict = defaultdict(Counter)
     global_mat_counts: Counter = Counter()
-    for p in valid:
-        cat = p["category"]
-        cat_counts[cat] += 1
-        for m in p["materials"]:
-            name = m["name"].strip()
-            if name:
-                cat_mat_counts[cat][name] += 1
-                global_mat_counts[name] += 1
+    all_valid_for_vocab: list = []
+
+    for key in target_keys:
+        ckpt = torch.load(str(available[key]), map_location="cpu", weights_only=False)
+        cat_index = ckpt["cat_index"]
+        cfg = TARGET_CONFIGS.get(key, {})
+        valid = filter_valid_products(
+            products, cat_index,
+            value_min=cfg.get("value_min", ckpt.get("value_min", 0.0)),
+            value_max=cfg.get("value_max", ckpt.get("value_max", 10.0)),
+            target_field_path=cfg.get("field_path", ckpt.get("field_path")),
+        )
+        print(f"  {key}: {len(valid)} valid products, {len(cat_index)} categories")
+        all_valid_for_vocab.extend(valid)
+
+        for p in valid:
+            # Key by the same string InferenceAdapter.categories() exposes in the
+            # dropdown -- the real PCR if reported, else "Other: <standardized>" --
+            # so material ordering is tailored for "Other: X" selections too,
+            # not just real PCR categories.
+            cat = p["category"] if p["has_pcr"] else f"{STD_CATEGORY_PREFIX}{p['category_resolved']}"
+            cat_counts[cat] += 1
+            for m in p["materials"]:
+                name = m["name"].strip()
+                if name:
+                    cat_mat_counts[cat][name] += 1
+                    global_mat_counts[name] += 1
+
+        shutil.copyfile(available[key], models_out_dir / f"{key}.pt")
+
+        manifest[key] = {
+            "indicator_key": cfg.get("indicator_key", ckpt.get("target_key", key)),
+            "stage_key":     cfg.get("stage_key", "total"),
+            "display_name":  cfg.get("display_name", ckpt.get("display_name", key)),
+            "unit":          cfg.get("unit", ckpt.get("unit", "")),
+        }
 
     sorted_cats = sorted(cat_counts, key=lambda c: -cat_counts[c])
     category_materials = {
@@ -66,15 +121,15 @@ def bake(model_path: Path, dataset_path: Path, out_dir: Path) -> None:
         for cat in sorted_cats
     }
     materials_list = sorted(global_mat_counts, key=lambda m: -global_mat_counts[m])
-    print(f"Unique material strings: {len(materials_list)}")
+    print(f"Unique material strings (union across targets): {len(materials_list)}")
 
-    vocab = get_vocab(valid)
+    vocab = get_vocab(all_valid_for_vocab)
     print(f"Vocab tokens loaded: {len(vocab)}")
 
     vocab_path              = out_dir / "vocab.npz"
     materials_path          = out_dir / "materials.json"
     category_materials_path = out_dir / "category_materials.json"
-    model_dest              = out_dir / "ghg_model.pt"
+    manifest_path            = out_dir / "targets_manifest.json"
 
     save_vocab_npz(vocab, vocab_path)
     print(f"Saved {vocab_path} ({vocab_path.stat().st_size / 1024:.1f} KB)")
@@ -87,19 +142,21 @@ def bake(model_path: Path, dataset_path: Path, out_dir: Path) -> None:
         json.dump(category_materials, f, ensure_ascii=False, indent=2)
     print(f"Saved {category_materials_path} ({len(category_materials)} categories)")
 
-    if model_path.resolve() != model_dest.resolve():
-        shutil.copyfile(model_path, model_dest)
-    print(f"Copied {model_path.name} -> {model_dest}")
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    print(f"Saved {manifest_path} ({len(manifest)} targets)")
+    print(f"Copied checkpoints -> {models_out_dir}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--out-dir", type=Path, default=REPO_ROOT / "desktop_app" / "assets")
-    parser.add_argument("--model",   type=Path, default=MODEL_PATH)
-    parser.add_argument("--dataset", type=Path, default=DATASET_PATH)
+    parser.add_argument("--out-dir",    type=Path, default=REPO_ROOT / "desktop_app" / "assets")
+    parser.add_argument("--models-dir", type=Path, default=MODELS_DIR)
+    parser.add_argument("--targets",    nargs="*", default=None)
+    parser.add_argument("--dataset",    type=Path, default=DATASET_PATH)
     args = parser.parse_args()
 
-    bake(args.model, args.dataset, args.out_dir)
+    bake(args.models_dir, args.dataset, args.out_dir, target_keys=args.targets)
 
 
 if __name__ == "__main__":

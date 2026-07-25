@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 import customtkinter as ctk
 
@@ -92,6 +92,7 @@ class MainWindow(ctk.CTk):
             self._left,
             categories=self.adapter.categories,
             on_change=self._on_shared_category_change,
+            sort=False,
         )
         self._shared_cat_panel.pack(fill="x", pady=(0, 10))
 
@@ -225,7 +226,9 @@ class MainWindow(ctk.CTk):
                 self._active_right_panel.clear_prediction()
                 self._active_right_panel.set_status(status)
             else:
-                self._active_right_panel.set_prediction(snap["value"], snap["bounds"])
+                self._active_right_panel.set_prediction(
+                    snap["value"], snap["bounds"], breakdown=snap.get("breakdown")
+                )
                 self._active_right_panel.set_status(status)
         else:
             results: List[ProductResult] = []
@@ -241,6 +244,7 @@ class MainWindow(ctk.CTk):
                         materials=snap["materials"],
                         eol=snap["eol"],
                         origin_pct=snap["origin_pct"],
+                        breakdown=snap.get("breakdown"),
                     ))
             self._active_right_panel.update(results)
 
@@ -297,7 +301,7 @@ class MainWindow(ctk.CTk):
         eol_for_pred = self._normalised_eol(eol_shares)
 
         try:
-            value = self.adapter.predict(
+            all_preds = self.adapter.predict_all(
                 category=category,
                 materials=materials,
                 eol=eol_for_pred,
@@ -309,7 +313,22 @@ class MainWindow(ctk.CTk):
             self._push_all_predictions()
             return
 
+        value  = all_preds[self.adapter.default_target_key]
         bounds = self.adapter.prediction_range(value, category)
+
+        breakdown: List[dict] = []
+        for stage_key, target_key in self.adapter.stage_target_keys().items():
+            stage_value = all_preds.get(target_key)
+            if stage_value is None:
+                continue
+            manifest_entry = self.adapter.manifest[target_key]
+            breakdown.append({
+                "stage_key":    stage_key,
+                "display_name": manifest_entry["display_name"],
+                "unit":         manifest_entry["unit"],
+                "value":        stage_value,
+                "bounds":       self.adapter.prediction_range(stage_value, category, target_key=target_key),
+            })
 
         # Normalised materials for display (what the model actually used)
         if mat_total > 0:
@@ -323,6 +342,7 @@ class MainWindow(ctk.CTk):
         self._predictions[id(card)] = {
             "value":      value,
             "bounds":     bounds,
+            "breakdown":  breakdown,
             "category":   category,
             "materials":  norm_materials,
             "eol":        eol_for_pred,

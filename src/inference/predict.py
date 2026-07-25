@@ -43,6 +43,12 @@ class LoadedModel:
     category_error_bounds: Optional[Dict[str, Dict]] = field(default=None)
     std_cat_index: Optional[Dict[str, int]] = field(default=None)
     unified_cat_index: Optional[Dict[str, int]] = field(default=None)
+    resolved_category_error_bounds: Optional[Dict[str, Dict]] = field(default=None)
+    value_min: float = GHG_MIN
+    value_max: float = GHG_MAX
+    target_key: str = "ghg_total"
+    display_name: str = "GHG Total"
+    unit: str = "kg CO2-eq/kg"
 
 
 def load_model(checkpoint: Union[str, Path] = MODEL_PATH) -> LoadedModel:
@@ -66,6 +72,12 @@ def load_model(checkpoint: Union[str, Path] = MODEL_PATH) -> LoadedModel:
         category_error_bounds=ckpt.get("category_error_bounds"),
         std_cat_index=ckpt.get("std_cat_index"),
         unified_cat_index=ckpt.get("unified_cat_index"),
+        resolved_category_error_bounds=ckpt.get("resolved_category_error_bounds"),
+        value_min=float(ckpt.get("value_min", GHG_MIN)),
+        value_max=float(ckpt.get("value_max", GHG_MAX)),
+        target_key=ckpt.get("target_key", "ghg_total"),
+        display_name=ckpt.get("display_name", "GHG Total"),
+        unit=ckpt.get("unit", "kg CO2-eq/kg"),
     )
 
 

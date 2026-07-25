@@ -1,0 +1,32 @@
+{
+  "ghg_a1a3": {
+    "indicator_key": "ghg",
+    "stage_key": "a1a3",
+    "display_name": "GHG A1-A3",
+    "unit": "kg CO2-eq/kg"
+  },
+  "ghg_c3": {
+    "indicator_key": "ghg",
+    "stage_key": "c3",
+    "display_name": "GHG C3",
+    "unit": "kg CO2-eq/kg"
+  },
+  "ghg_c4": {
+    "indicator_key": "ghg",
+    "stage_key": "c4",
+    "display_name": "GHG C4",
+    "unit": "kg CO2-eq/kg"
+  },
+  "ghg_d": {
+    "indicator_key": "ghg",
+    "stage_key": "d",
+    "display_name": "GHG D (avoided burden)",
+    "unit": "kg CO2-eq/kg"
+  },
+  "ghg_total": {
+    "indicator_key": "ghg",
+    "stage_key": "total",
+    "display_name": "GHG Total",
+    "unit": "kg CO2-eq/kg"
+  }
+}
