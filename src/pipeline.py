@@ -47,16 +47,7 @@ from src.train.evaluator import (
     print_worst_predictions,
 )
 from src.train.trainer import train_model
-from src.utils import signed_expm1, signed_log1p
-
-
-def _get_transforms(transform_type: str):
-    """Return (forward_fn, inverse_fn) for the requested transform."""
-    if transform_type == "signed_log1p":
-        return signed_log1p, signed_expm1
-    if transform_type == "log1p":
-        return np.log1p, np.expm1
-    raise ValueError(f"Unknown transform '{transform_type}'. Use 'log1p' or 'signed_log1p'.")
+from src.utils import make_transforms
 
 
 def run(target_key: str = "ghg_total"):
@@ -71,11 +62,12 @@ def run(target_key: str = "ghg_total"):
     value_min    = cfg["value_min"]
     value_max    = cfg["value_max"]
     transform    = cfg["transform"]
+    scale        = cfg["scale"]
     thresholds   = cfg["thresholds"]
     unit         = cfg["unit"]
     display_name = cfg["display_name"]
 
-    forward_fn, inverse_fn = _get_transforms(transform)
+    forward_fn, inverse_fn = make_transforms(transform, scale)
 
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     model_path       = MODELS_DIR / f"{target_key}.pt"
@@ -86,12 +78,17 @@ def run(target_key: str = "ghg_total"):
         "scatter":   figures_dir / "pred_vs_actual.png",
         "residuals": figures_dir / "residuals.png",
     }
-    diagnostics_path = BASE_DIR / f"diagnostics_{target_key}.json"
+    diagnostics_dir  = BASE_DIR / "diagnostics"
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+    diagnostics_path = diagnostics_dir / f"{target_key}.json"
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
     print(f"Target: {display_name}  ({target_key})")
-    print(f"Field:  {field_path}  |  range [{value_min}, {value_max}]  |  transform: {transform}")
+    print(
+        f"Field:  {field_path}  |  range [{value_min}, {value_max}]  "
+        f"|  transform: {transform}(x/{scale:g})"
+    )
     print(f"Script directory: {BASE_DIR}")
 
     print(f"\nLoading '{DATASET_PATH.name}' ...")
@@ -128,13 +125,45 @@ def run(target_key: str = "ghg_total"):
     if len(valid_products) < 10:
         raise ValueError("Need at least 10 valid labelled samples after filtering.")
 
+    # build_category_index applies MIN_CATEGORY_COUNT to the *whole* dataset, but
+    # each target drops a different set of products (nulls + value bounds), so a
+    # category can fall below it here.  Both splits below stratify on category:
+    # a category left with 4 members puts only 1 into the val/test pool, and
+    # sklearn refuses to stratify a class of 1.  Re-apply the threshold to the
+    # filtered population so the split is always well defined.
+    cat_counts_filtered = Counter(p["category"] for p in valid_products)
+    thin_categories = {
+        cat for cat, cnt in cat_counts_filtered.items() if cnt < MIN_CATEGORY_COUNT
+    }
+    if thin_categories:
+        before = len(valid_products)
+        valid_products = [
+            p for p in valid_products if p["category"] not in thin_categories
+        ]
+        print(
+            f"\nDropped {before - len(valid_products)} products in "
+            f"{len(thin_categories)} category/ies with < {MIN_CATEGORY_COUNT} "
+            f"labelled samples for this target (stratified split needs them):"
+        )
+        for cat in sorted(thin_categories):
+            print(f"  {cat:<48} {cat_counts_filtered[cat]:>4}")
+
     target_values = np.array([p["target"] for p in valid_products], dtype=np.float32)
     print(
         f"\nTarget summary after filtering -> "
-        f"min: {target_values.min():.4f}, "
-        f"median: {np.median(target_values):.4f}, "
-        f"max: {target_values.max():.4f}, "
-        f"mean: {target_values.mean():.4f}"
+        f"min: {target_values.min():.4g}, "
+        f"median: {np.median(target_values):.4g}, "
+        f"max: {target_values.max():.4g}, "
+        f"mean: {target_values.mean():.4g}"
+    )
+
+    # The transform is only a log transform when `scale` matches the target's
+    # own magnitude; skew of the forward-transformed target is the check.
+    pos_median = float(np.median(target_values[target_values > 0])) \
+        if (target_values > 0).any() else float("nan")
+    print(
+        f"Transform scale: {scale:g}  (median positive value: {pos_median:.4g}) "
+        f"-- these should be within ~an order of magnitude"
     )
 
     cat_counts_valid = Counter(p["category"] for p in valid_products)
@@ -234,13 +263,11 @@ def run(target_key: str = "ghg_total"):
 
         val_res  = evaluate_model(
             model, val_loader,  device, scaler_y_mean, scaler_y_scale,
-            inverse_fn=inverse_fn, value_min=value_min, value_max=value_max,
-            thresholds=thresholds,
+            inverse_fn=inverse_fn, forward_fn=forward_fn, thresholds=thresholds,
         )
         test_res = evaluate_model(
             model, test_loader, device, scaler_y_mean, scaler_y_scale,
-            inverse_fn=inverse_fn, value_min=value_min, value_max=value_max,
-            thresholds=thresholds,
+            inverse_fn=inverse_fn, forward_fn=forward_fn, thresholds=thresholds,
         )
 
         test_cats = [categories_all[i] for i in idx_te]
@@ -252,19 +279,21 @@ def run(target_key: str = "ghg_total"):
             all_resolved_cat_signed_errors[cat].append(float(pred) - float(actual))
 
         print(
-            f"\nSeed {seed}: val MAE={val_res['mae']:.4f}  "
-            f"test MAE={test_res['mae']:.4f}  test MedAE={test_res['medae']:.4f}  "
-            f"test Bias={test_res['bias']:+.4f}"
+            f"\nSeed {seed}: val MAE={val_res['mae']:.4g}  "
+            f"test MAE={test_res['mae']:.4g}  test MedAE={test_res['medae']:.4g}  "
+            f"test Bias={test_res['bias']:+.4g}  "
+            f"test Fold={test_res['fold_median']:.2f}x"
         )
 
         seed_results.append({
-            "seed":       seed,
-            "val_mae":    val_res["mae"],
-            "test_mae":   test_res["mae"],
-            "test_medae": test_res["medae"],
-            "test_bias":  test_res["bias"],
-            "test_rmse":  test_res["rmse"],
-            "test_nrmse": test_res["nrmse"],
+            "seed":        seed,
+            "val_mae":     val_res["mae"],
+            "test_mae":    test_res["mae"],
+            "test_medae":  test_res["medae"],
+            "test_bias":   test_res["bias"],
+            "test_rmse":   test_res["rmse"],
+            "test_fold_median": test_res["fold_median"],
+            "test_fold_p90":    test_res["fold_p90"],
             **{k: v for k, v in test_res.items() if k.startswith("within_")},
         })
 
@@ -303,22 +332,24 @@ def run(target_key: str = "ghg_total"):
     test_maes   = [r["test_mae"]   for r in seed_results]
     test_medaes = [r["test_medae"] for r in seed_results]
     test_biases = [r["test_bias"]  for r in seed_results]
+    test_folds  = [r["test_fold_median"] for r in seed_results]
 
-    print(f"\n{'=' * 58}")
+    print(f"\n{'=' * 64}")
     print(f"  MULTI-SEED SUMMARY  ({len(SEEDS)} seeds)")
-    print(f"{'=' * 58}")
+    print(f"{'=' * 64}")
     for r in seed_results:
         marker = "  <-- saved" if r["seed"] == best_seed else ""
         print(
-            f"  seed {r['seed']}: val MAE={r['val_mae']:.4f}  "
-            f"test MAE={r['test_mae']:.4f}  MedAE={r['test_medae']:.4f}  "
-            f"Bias={r['test_bias']:+.4f}{marker}"
+            f"  seed {r['seed']}: val MAE={r['val_mae']:.4g}  "
+            f"test MAE={r['test_mae']:.4g}  MedAE={r['test_medae']:.4g}  "
+            f"Bias={r['test_bias']:+.4g}  Fold={r['test_fold_median']:.2f}x{marker}"
         )
-    print(f"  {'─' * 54}")
-    print(f"  Test MAE   : {np.mean(test_maes):.4f} ± {np.std(test_maes):.4f}")
-    print(f"  Test MedAE : {np.mean(test_medaes):.4f} ± {np.std(test_medaes):.4f}")
-    print(f"  Test Bias  : {np.mean(test_biases):+.4f} ± {np.std(test_biases):.4f}")
-    print(f"{'=' * 58}")
+    print(f"  {'─' * 60}")
+    print(f"  Test MAE   : {np.mean(test_maes):.4g} ± {np.std(test_maes):.4g}")
+    print(f"  Test MedAE : {np.mean(test_medaes):.4g} ± {np.std(test_medaes):.4g}")
+    print(f"  Test Bias  : {np.mean(test_biases):+.4g} ± {np.std(test_biases):.4g}")
+    print(f"  Test Fold  : {np.mean(test_folds):.3f}x ± {np.std(test_folds):.3f}")
+    print(f"{'=' * 64}")
 
     # ── Full reporting for best seed ──────────────────────────────────────────
     model = GHGNet(input_dim=input_dim).to(device)
@@ -328,32 +359,33 @@ def run(target_key: str = "ghg_total"):
     print(f"  BEST MODEL (seed {best_seed}) — TEST SET RESULTS")
     print("=" * 50)
     print(f"  Target        {display_name}  [{unit}]")
-    print(f"  MAE           {best_test_res['mae']:.4f}")
-    print(f"  MedAE         {best_test_res['medae']:.4f}")
-    print(f"  Bias          {best_test_res['bias']:+.4f}  (mean predicted - actual; +over / -under)")
-    print(f"  RMSE          {best_test_res['rmse']:.4f}")
-    print(f"  NRMSE         {best_test_res['nrmse']:.4f}  (fraction of [{value_min}, {value_max}] range)")
+    print(f"  MAE           {best_test_res['mae']:.4g}")
+    print(f"  MedAE         {best_test_res['medae']:.4g}")
+    print(f"  Bias          {best_test_res['bias']:+.4g}  (mean predicted - actual; +over / -under)")
+    print(f"  RMSE          {best_test_res['rmse']:.4g}")
+    print(f"  Fold (median) {best_test_res['fold_median']:.2f}x  (scale-free: predicted within this factor)")
+    print(f"  Fold (p90)    {best_test_res['fold_p90']:.2f}x  (90% of predictions within this factor)")
     for t in thresholds:
         key = f"within_{t}"
         print(f"  Within ±{t:<6} {best_test_res[key]:.1f}%")
     print("=" * 50)
 
     print("\n-- Sample predictions (first 5 of best-seed test set) --")
-    print(f"  {'Actual':>10}  {'Predicted':>10}  {'Abs Err':>10}  Category")
+    print(f"  {'Actual':>12}  {'Predicted':>12}  {'Abs Err':>12}  Category")
     for a, p, c in zip(
         best_test_res["actuals"][:5], best_test_res["preds"][:5], best_test_cats[:5]
     ):
-        print(f"  {a:>10.4f}  {p:>10.4f}  {abs(a - p):>10.4f}  {c}")
+        print(f"  {a:>12.4g}  {p:>12.4g}  {abs(a - p):>12.4g}  {c}")
 
     per_cat_metrics = print_category_metrics(
         best_test_res["actuals"], best_test_res["preds"], best_test_cats,
-        value_min=value_min, value_max=value_max, thresholds=thresholds,
+        forward_fn=forward_fn, thresholds=thresholds,
     )
     print("\n(above grouped by raw c_pcr -- 'N/A' row is products with no reported PCR)")
 
     per_cat_resolved_metrics = print_category_metrics(
         best_test_res["actuals"], best_test_res["preds"], best_test_cats_resolved,
-        value_min=value_min, value_max=value_max, thresholds=thresholds,
+        forward_fn=forward_fn, thresholds=thresholds,
     )
     print("\n(above grouped by coalesced category -- PCR if reported, else standardized category)")
 
@@ -380,6 +412,7 @@ def run(target_key: str = "ghg_total"):
             "unified_cat_index":     unified_cat_index,
             "input_dim":             input_dim,
             "transform_type":        transform,
+            "transform_scale":       scale,
             "target_key":            target_key,
             "field_path":            field_path,
             "value_min":             value_min,
@@ -412,6 +445,7 @@ def run(target_key: str = "ghg_total"):
         "value_min":              value_min,
         "value_max":              value_max,
         "transform":              transform,
+        "transform_scale":        scale,
         "thresholds":             thresholds,
         "min_category_count":     MIN_CATEGORY_COUNT,
         "seeds":                  SEEDS,
@@ -422,7 +456,8 @@ def run(target_key: str = "ghg_total"):
             "medae":        best_test_res["medae"],
             "bias":         best_test_res["bias"],
             "rmse":         best_test_res["rmse"],
-            "nrmse":        best_test_res["nrmse"],
+            "fold_median":  best_test_res["fold_median"],
+            "fold_p90":     best_test_res["fold_p90"],
             **{k: v for k, v in best_test_res.items() if k.startswith("within_")},
             "per_category": per_cat_metrics,
             "per_category_resolved": per_cat_resolved_metrics,
@@ -434,6 +469,8 @@ def run(target_key: str = "ghg_total"):
             "test_medae_std":  float(np.std(test_medaes)),
             "test_bias_mean":  float(np.mean(test_biases)),
             "test_bias_std":   float(np.std(test_biases)),
+            "test_fold_median_mean": float(np.mean(test_folds)),
+            "test_fold_median_std":  float(np.std(test_folds)),
         },
         "history": best_history,
     }

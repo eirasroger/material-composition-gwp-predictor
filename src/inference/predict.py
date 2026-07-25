@@ -8,8 +8,9 @@ Two entry points:
 Use ``load_model`` + ``predict_ghg_with_loaded`` for interactive applications.
 
 The inverse transform (log1p or signed_log1p) is stored in the checkpoint under
-'transform_type' and applied automatically.  Old checkpoints without that key
-default to 'log1p' for backward compatibility.
+'transform_type', together with its crossover in 'transform_scale', and both are
+applied automatically.  Old checkpoints without those keys default to 'log1p'
+and scale 1.0, which is what they were trained with.
 """
 
 from dataclasses import dataclass, field
@@ -23,13 +24,7 @@ from src.config import GHG_MAX, GHG_MIN, MODEL_PATH
 from src.data.preprocessing import normalize_product
 from src.embeddings.encode import category_onehot, product_embedding
 from src.model.network import GHGNet
-from src.utils import signed_expm1
-
-
-def _make_inverse_fn(transform_type: str):
-    if transform_type == "signed_log1p":
-        return signed_expm1
-    return np.expm1
+from src.utils import make_transforms
 
 
 @dataclass
@@ -40,6 +35,7 @@ class LoadedModel:
     cat_index: Dict[str, int]
     input_dim: int
     transform_type: str = "log1p"
+    transform_scale: float = 1.0
     category_error_bounds: Optional[Dict[str, Dict]] = field(default=None)
     std_cat_index: Optional[Dict[str, int]] = field(default=None)
     unified_cat_index: Optional[Dict[str, int]] = field(default=None)
@@ -69,6 +65,7 @@ def load_model(checkpoint: Union[str, Path] = MODEL_PATH) -> LoadedModel:
         cat_index=ckpt["cat_index"],
         input_dim=int(ckpt["input_dim"]),
         transform_type=ckpt.get("transform_type", "log1p"),
+        transform_scale=float(ckpt.get("transform_scale", 1.0)),
         category_error_bounds=ckpt.get("category_error_bounds"),
         std_cat_index=ckpt.get("std_cat_index"),
         unified_cat_index=ckpt.get("unified_cat_index"),
@@ -121,7 +118,7 @@ def predict_ghg_with_loaded(
     with torch.no_grad():
         pred_scaled = loaded.model(x).item()
 
-    inverse_fn = _make_inverse_fn(loaded.transform_type)
+    _, inverse_fn = make_transforms(loaded.transform_type, loaded.transform_scale)
     return float(inverse_fn(pred_scaled * loaded.y_scale + loaded.y_mean))
 
 
