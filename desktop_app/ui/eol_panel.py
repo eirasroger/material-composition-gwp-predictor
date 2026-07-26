@@ -93,6 +93,22 @@ class EolPanel(ctk.CTkFrame):
     def total(self) -> float:
         return sum(s.get() for s in self._sliders.values())
 
+    def set_shares(self, shares) -> None:
+        """
+        Restore the four sliders from an ``EolShares`` or a plain dict.
+
+        Silent — ``PercentSlider.set`` does not invoke its command — so the
+        caller is responsible for triggering one prediction afterwards. The sum
+        indicator is refreshed here because nothing else would.
+        """
+        for key, _label in self.LABELS:
+            value = (
+                shares.get(key, 0.0) if isinstance(shares, dict)
+                else getattr(shares, key, 0.0)
+            )
+            self._sliders[key].set(float(value))
+        self._sum_indicator.update_total(self.total())
+
     def _autoscale(self) -> None:
         keys = list(self._sliders.keys())
         values = [self._sliders[k].get() for k in keys]

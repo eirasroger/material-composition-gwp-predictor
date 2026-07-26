@@ -45,6 +45,10 @@ class OriginPanel(ctk.CTkFrame):
     def value(self) -> float:
         return self._slider.get()
 
+    def set_value(self, value: float) -> None:
+        """Set the slider without firing ``on_change`` (``PercentSlider.set`` is silent)."""
+        self._slider.set(float(value))
+
     def _handle_change(self, v: float) -> None:
         if self._on_change is not None:
             self._on_change(float(v))

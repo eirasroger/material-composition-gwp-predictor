@@ -46,7 +46,6 @@ asset_files = [
     (str(p), "assets/models") for p in _model_checkpoints
 ] + [
     (str(APP_DIR / "assets" / "targets_manifest.json"),    "assets"),
-    (str(APP_DIR / "assets" / "distributions.json"),       "assets"),
     (str(APP_DIR / "assets" / "vocab.npz"),                "assets"),
     (str(APP_DIR / "assets" / "materials.json"),           "assets"),
     (str(APP_DIR / "assets" / "category_materials.json"),  "assets"),

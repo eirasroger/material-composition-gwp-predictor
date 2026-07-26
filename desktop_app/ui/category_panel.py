@@ -48,6 +48,21 @@ class CategoryPanel(ctk.CTkFrame):
         v = self._dropdown.get()
         return v if v in self._categories else None
 
+    def select(self, category: Optional[str]) -> None:
+        """
+        Set the dropdown text without firing ``on_change``.
+
+        Silent by design: a loader restores several panels in sequence and then
+        triggers exactly one prediction itself, rather than one per widget.
+        An unknown ``category`` is still written to the entry so the user can
+        see what the saved scenario asked for; ``selected()`` will report None
+        until it matches a live category.
+        """
+        self._dropdown.set(category or "")
+
+    def is_known(self, category: Optional[str]) -> bool:
+        return category is not None and category in self._categories
+
     def _handle_select(self, value: str) -> None:
         if self._on_change is not None:
             self._on_change(value if value in self._categories else None)

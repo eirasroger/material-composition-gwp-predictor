@@ -1,6 +1,9 @@
 """
 Main window: multi-product comparison layout.
 
+Scenario bar (spans both columns)
+  └── current scenario name + dirty marker, Open / Save / Save as
+
 Left column
   ├── Shared CategoryPanel (applies to all cards unless overridden)
   ├── ProductCard 1 … 4  (collapsible; each can override category)
@@ -13,25 +16,33 @@ Right column — an indicator selector above one of three panels:
 
 Every card predicts every target on each edit (25 forward passes ~5 ms, so the
 selector only chooses what to *display* — it never triggers re-prediction).
+
+Scenarios persist inputs only (see desktop_app/library.py); loading one rebuilds
+the cards and re-predicts, which is why nothing derived is ever written to disk.
 """
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from typing import List, Optional
 
 import customtkinter as ctk
 
+from desktop_app import library
 from desktop_app.inference_adapter import EolShares, InferenceAdapter
 from desktop_app.ui.category_panel import CategoryPanel
 from desktop_app.ui.comparison_panel import ComparisonPanel, ProductResult
 from desktop_app.ui.prediction_panel import PredictionPanel
 from desktop_app.ui.product_card import ProductCard
+from desktop_app.ui.scenario_dialog import (
+    ScenarioLibraryDialog, SaveDiscardCancel, ask_name,
+)
 from desktop_app.ui.summary_panel import IndicatorReading, SummaryPanel, SummaryProduct
 from desktop_app.ui.theme import (
     ACCENT, BG, BORDER, MAX_PRODUCTS, PRODUCT_COLORS, SURFACE, SURFACE_HI,
-    TEXT_PRI, TEXT_SEC, font, indicator_label, indicator_sort_key,
+    TEXT_DIM, TEXT_PRI, TEXT_SEC, font, indicator_label, indicator_sort_key,
 )
 from desktop_app._version import __version__
 from src.utils import normalise_shares_to_100
@@ -39,9 +50,15 @@ from src.utils import normalise_shares_to_100
 
 DEBOUNCE_MS = 150
 
+# The working state is autosaved this long after the last edit. Well above
+# DEBOUNCE_MS so a burst of slider drags produces one disk write, not thirty.
+SESSION_AUTOSAVE_MS = 1500
+
 # Selector entry for the all-indicator radar. Not an indicator_key, so it can
 # never collide with one from the manifest.
 SUMMARY_VIEW = "Summary — all indicators"
+
+UNTITLED = "Untitled scenario"
 
 
 def _icon_path() -> Path:
@@ -99,9 +116,51 @@ class MainWindow(ctk.CTk):
         self._card_color_idx: dict[int, int] = {}          # id(card) → PRODUCT_COLORS index
         self._active_right_panel = None
 
+        # ── scenario state ────────────────────────────────────────────────────
+        self._scenario_id: Optional[str] = None      # None until saved once
+        self._scenario_name: Optional[str] = None
+        self._saved_fingerprint: Optional[str] = None  # state as of last save/load
+        self._loading = False        # suppresses per-card predicts while rebuilding
+        self._suppress_push = False  # coalesces the redraw to one per bulk load
+        self._session_after: Optional[str] = None
+
         self.grid_columnconfigure(0, weight=1, uniform="cols")
         self.grid_columnconfigure(1, weight=1, uniform="cols")
-        self.grid_rowconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=0)   # scenario bar
+        self.grid_rowconfigure(1, weight=1)   # content
+
+        # ── scenario bar ──────────────────────────────────────────────────────
+        bar = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=10)
+        bar.grid(row=0, column=0, columnspan=2, sticky="ew", padx=12, pady=(12, 0))
+
+        ctk.CTkLabel(
+            bar, text="Scenario", font=font(12), text_color=TEXT_SEC,
+        ).pack(side="left", padx=(16, 10), pady=10)
+
+        self._scenario_label = ctk.CTkLabel(
+            bar, text=UNTITLED, font=font(13, "bold"), text_color=TEXT_PRI, anchor="w",
+        )
+        self._scenario_label.pack(side="left", pady=10)
+
+        self._scenario_hint = ctk.CTkLabel(
+            bar, text="", font=font(11), text_color=TEXT_DIM, anchor="w",
+        )
+        self._scenario_hint.pack(side="left", padx=(10, 0), pady=10)
+
+        # Packed right-to-left: Save sits at the far right as the primary action.
+        ctk.CTkButton(
+            bar, text="Save", width=90, height=32,
+            font=font(12, "bold"), command=self._save,
+        ).pack(side="right", padx=(8, 16), pady=10)
+
+        for text, command in (("Save as…", self._save_as),
+                              ("My scenarios", self._open_library)):
+            ctk.CTkButton(
+                bar, text=text, width=110, height=32,
+                font=font(12), fg_color="transparent", border_width=1,
+                border_color=BORDER, text_color=TEXT_SEC, hover_color=BORDER,
+                command=command,
+            ).pack(side="right", padx=(8, 0), pady=10)
 
         # ── left column ───────────────────────────────────────────────────────
         self._left = ctk.CTkScrollableFrame(
@@ -112,7 +171,7 @@ class MainWindow(ctk.CTk):
             scrollbar_button_color=BORDER,
             scrollbar_button_hover_color=ACCENT,
         )
-        self._left.grid(row=0, column=0, sticky="nsew", padx=(12, 6), pady=12)
+        self._left.grid(row=1, column=0, sticky="nsew", padx=(12, 6), pady=12)
 
         # Shared category panel — above all product cards
         self._shared_cat_panel = CategoryPanel(
@@ -139,7 +198,7 @@ class MainWindow(ctk.CTk):
 
         # ── right column ──────────────────────────────────────────────────────
         self._right_container = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=10)
-        self._right_container.grid(row=0, column=1, sticky="nsew", padx=(6, 12), pady=12)
+        self._right_container.grid(row=1, column=1, sticky="nsew", padx=(6, 12), pady=12)
         self._right_container.grid_rowconfigure(1, weight=1)
         self._right_container.grid_columnconfigure(0, weight=1)
 
@@ -174,6 +233,270 @@ class MainWindow(ctk.CTk):
         self._rebuild_right_panel()
         self._schedule_predict(card1)
 
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._mark_saved()
+        self._restore_session()
+        self._refresh_scenario_bar()
+
+    # ══ scenarios ═════════════════════════════════════════════════════════════
+
+    def scenario_state(self) -> dict:
+        """Everything the user typed, and nothing else. See library.py."""
+        return {
+            "shared_category": self._shared_category,
+            "products": [card.to_dict() for card in self._cards],
+        }
+
+    @staticmethod
+    def _fingerprint(state: dict) -> str:
+        """
+        Comparable form of a state, for dirty tracking.
+
+        Percentages are rounded because CTkSlider snaps to its step size
+        (number_of_steps=1000 → 0.1%), so a value written to disk can come back
+        marginally different and would otherwise read as an unsaved edit the
+        instant a scenario finished loading.
+        """
+        def round_floats(obj):
+            if isinstance(obj, float):
+                return round(obj, 3)
+            if isinstance(obj, dict):
+                return {k: round_floats(v) for k, v in obj.items()}
+            if isinstance(obj, list):
+                return [round_floats(v) for v in obj]
+            return obj
+
+        return json.dumps(round_floats(state), sort_keys=True, ensure_ascii=False)
+
+    def _mark_saved(self) -> None:
+        self._saved_fingerprint = self._fingerprint(self.scenario_state())
+        self._refresh_scenario_bar()
+
+    def _is_dirty(self) -> bool:
+        return self._fingerprint(self.scenario_state()) != self._saved_fingerprint
+
+    def _is_empty(self) -> bool:
+        """Nothing worth keeping: no category and no materials anywhere."""
+        state = self.scenario_state()
+        if state["shared_category"]:
+            return False
+        return not any(p["materials"] for p in state["products"])
+
+    def _refresh_scenario_bar(self) -> None:
+        name = self._scenario_name or UNTITLED
+        dirty = self._is_dirty()
+        self._scenario_label.configure(text=f"{name}{' *' if dirty else ''}")
+        if self._scenario_name is None:
+            hint = "not saved yet" if dirty else ""
+        else:
+            hint = "unsaved changes" if dirty else "saved"
+        self._scenario_hint.configure(text=hint)
+
+    def apply_scenario_state(self, state: dict) -> None:
+        """
+        Rebuild the whole left column from ``state``, then predict once per card.
+
+        Cards are torn down and recreated rather than patched: the count can
+        differ from what is on screen, colour slots have to be reissued from
+        scratch, and a partially-updated card list is a whole class of bugs not
+        worth carrying for an operation that costs ~21 ms of prediction.
+        """
+        self._loading = True
+        try:
+            for card in self._cards:
+                pending = self._pending_after.get(id(card))
+                if pending is not None:
+                    try:
+                        self.after_cancel(pending)
+                    except Exception:
+                        pass
+                card.destroy()
+
+            self._cards.clear()
+            self._predictions.clear()
+            self._statuses.clear()
+            self._pending_after.clear()
+            self._used_color_indices.clear()
+            self._card_color_idx.clear()
+
+            self._shared_category = state.get("shared_category")
+            self._shared_cat_panel.select(self._shared_category)
+
+            products = list(state.get("products") or [])[:MAX_PRODUCTS] or [{}]
+
+            self._add_btn.pack_forget()
+            for index, entry in enumerate(products):
+                card = self._create_card(removable=index > 0)
+                card.apply_dict(entry, shared_category=self._shared_category)
+                card.pack(fill="x", pady=(0, 8))
+            self._add_btn.pack(fill="x", pady=(0, 4))
+            self._add_btn.configure(
+                state="normal" if len(self._cards) < MAX_PRODUCTS else "disabled"
+            )
+        finally:
+            self._loading = False
+
+        self._rebuild_right_panel()
+
+        # One redraw for the whole load, not one per card.
+        self._suppress_push = True
+        try:
+            for card in self._cards:
+                self._predict_now(card)
+        finally:
+            self._suppress_push = False
+        self._push_all_predictions()
+
+    def _report_stale(self, state: dict) -> None:
+        """
+        Surface anything the current build no longer recognises.
+
+        Never silent: a category dropped by a re-bake would otherwise reload as
+        an empty selector, indistinguishable from the user not having picked one.
+        """
+        warnings = library.validate_state(
+            state, self.adapter.categories, self.adapter.materials
+        )
+        if not warnings:
+            return
+        card = self._cards[0] if self._cards else None
+        if card is not None:
+            existing = self._statuses.get(id(card), "")
+            merged = "\n".join([*warnings, existing]) if existing else "\n".join(warnings)
+            self._statuses[id(card)] = merged
+            self._push_all_predictions()
+
+    # ── scenario actions ──────────────────────────────────────────────────────
+
+    def _confirm_discard(self, message: str) -> bool:
+        """
+        True when it is safe to proceed (saved, discarded, or nothing at stake).
+
+        Empty states never prompt — a fresh window with one blank card is not
+        work anybody meant to keep.
+        """
+        if not self._is_dirty() or self._is_empty():
+            return True
+        choice = SaveDiscardCancel(self, message).ask()
+        if choice == "cancel":
+            return False
+        if choice == "save":
+            return self._save()
+        return True
+
+    def _save(self) -> bool:
+        """Overwrite the current scenario in place; falls through to Save as."""
+        if self._scenario_id is None or self._scenario_name is None:
+            return self._save_as()
+        try:
+            library.save_scenario(
+                name=self._scenario_name,
+                state=self.scenario_state(),
+                scenario_id=self._scenario_id,
+            )
+        except Exception as exc:
+            self._report_error(f"Could not save the scenario: {exc}")
+            return False
+        self._mark_saved()
+        self._save_session_now()
+        return True
+
+    def _save_as(self) -> bool:
+        name = ask_name(
+            self,
+            title="Save scenario as",
+            prompt="Scenario name",
+            initial=self._scenario_name or "",
+        )
+        if not name:
+            return False
+        try:
+            doc = library.save_scenario(name=name, state=self.scenario_state())
+        except Exception as exc:
+            self._report_error(f"Could not save the scenario: {exc}")
+            return False
+        self._scenario_id = doc["id"]
+        self._scenario_name = doc["name"]
+        self._mark_saved()
+        self._save_session_now()
+        return True
+
+    def _open_library(self) -> None:
+        ScenarioLibraryDialog(self, on_load=self._load_scenario)
+
+    def _load_scenario(self, scenario_id: str) -> None:
+        if not self._confirm_discard(
+            "This scenario has unsaved changes. Save them before opening another one?"
+        ):
+            return
+        try:
+            doc = library.load_scenario(scenario_id)
+        except Exception as exc:
+            self._report_error(f"Could not open the scenario: {exc}")
+            return
+
+        state = library.state_from_doc(doc)
+        self.apply_scenario_state(state)
+        self._scenario_id = doc.get("id")
+        self._scenario_name = doc.get("name")
+        self._mark_saved()
+        self._report_stale(state)
+        self._save_session_now()
+
+    def _report_error(self, message: str) -> None:
+        if self._cards:
+            self._statuses[id(self._cards[0])] = message
+            self._push_all_predictions()
+
+    # ── last-session autosave ─────────────────────────────────────────────────
+
+    def _schedule_session_save(self) -> None:
+        if self._loading:
+            return
+        if self._session_after is not None:
+            try:
+                self.after_cancel(self._session_after)
+            except Exception:
+                pass
+        self._session_after = self.after(SESSION_AUTOSAVE_MS, self._save_session_now)
+
+    def _save_session_now(self) -> None:
+        self._session_after = None
+        try:
+            library.save_session(
+                self.scenario_state(), self._scenario_id, self._scenario_name
+            )
+        except Exception:
+            pass    # a failed autosave must never interrupt the user
+
+    def _restore_session(self) -> None:
+        """Reopen whatever was on screen last time — including after an update."""
+        try:
+            restored = library.load_session()
+        except Exception:
+            restored = None
+        if restored is None:
+            return
+        state, scenario_id, scenario_name = restored
+        self.apply_scenario_state(state)
+        self._scenario_id = scenario_id
+        self._scenario_name = scenario_name
+        self._mark_saved()
+        self._report_stale(state)
+
+    def _on_close(self) -> None:
+        if not self._confirm_discard(
+            "This scenario has unsaved changes. Save them before closing?"
+        ):
+            return
+        if self._session_after is not None:
+            try:
+                self.after_cancel(self._session_after)
+            except Exception:
+                pass
+        self._save_session_now()
+        self.destroy()
+
     # ── shared category ───────────────────────────────────────────────────────
 
     def _on_shared_category_change(self, category: Optional[str]) -> None:
@@ -182,6 +505,7 @@ class MainWindow(ctk.CTk):
             card.apply_shared_category(category)
             if not card.has_category_override():
                 self._schedule_predict(card)
+        self._state_changed()
 
     def _effective_category(self, card: ProductCard) -> Optional[str]:
         if card.has_category_override():
@@ -228,6 +552,7 @@ class MainWindow(ctk.CTk):
         )
         self._rebuild_right_panel()
         self._schedule_predict(card)
+        self._state_changed()
 
     def _on_card_remove(self, card: ProductCard) -> None:
         if card not in self._cards:
@@ -248,6 +573,7 @@ class MainWindow(ctk.CTk):
         self._add_btn.configure(state="normal")
         self._rebuild_right_panel()
         self._push_all_predictions()
+        self._state_changed()
 
     # ── indicator selector ────────────────────────────────────────────────────
 
@@ -307,6 +633,8 @@ class MainWindow(ctk.CTk):
         self._active_right_panel = panel
 
     def _push_all_predictions(self) -> None:
+        if self._suppress_push:
+            return
         if self._active_right_panel is None or not self._cards:
             return
 
@@ -431,10 +759,23 @@ class MainWindow(ctk.CTk):
 
     # ── prediction wiring ─────────────────────────────────────────────────────
 
+    def _state_changed(self) -> None:
+        """Any edit to a saved-input: refresh the dirty marker, re-arm autosave."""
+        if self._loading:
+            return
+        self._refresh_scenario_bar()
+        self._schedule_session_save()
+
     def _on_card_change(self, card: ProductCard) -> None:
         self._schedule_predict(card)
+        self._state_changed()
 
     def _schedule_predict(self, card: ProductCard) -> None:
+        # A card fires on_change from its own constructor (MaterialsPanel adds a
+        # blank row), so a scenario load would queue one debounced prediction per
+        # card on top of the batch apply_scenario_state runs itself.
+        if self._loading:
+            return
         pending = self._pending_after.get(id(card))
         if pending is not None:
             try:

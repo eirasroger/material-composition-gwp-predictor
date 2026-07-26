@@ -83,6 +83,10 @@ class MaterialsPanel(ctk.CTkFrame):
         self._current_ordered: List[str] = self._all_materials
         self._on_change = on_change
         self._rows: List[_MaterialRow] = []
+        # Suppresses _handle_change while set_materials rebuilds the row list —
+        # every _add_row/_remove_row would otherwise fire on_change, i.e. one
+        # debounced re-prediction per material in the scenario being loaded.
+        self._suspend = False
 
         ctk.CTkLabel(
             self, text="Material Composition",
@@ -139,6 +143,39 @@ class MaterialsPanel(ctk.CTkFrame):
         for row in self._rows:
             row.dropdown.set_values(self._current_ordered, sort=False)
 
+    def set_materials(self, materials: List[Dict[str, float]]) -> None:
+        """
+        Replace every row with ``materials``. Fires ``on_change`` exactly once.
+
+        Call ``set_category`` first: new rows take their dropdown ordering from
+        the current category, and re-ordering afterwards would not change the
+        text already in a row.
+
+        Names not in the curated list are still written into the row so the user
+        can see and fix what the scenario asked for; ``materials()`` keeps
+        excluding them, so an unknown name can never reach the model.
+        """
+        self._suspend = True
+        try:
+            for row in self._rows:
+                try:
+                    row.destroy()
+                except Exception:
+                    pass
+            self._rows.clear()
+
+            for entry in materials:
+                self._add_row()
+                row = self._rows[-1]
+                row.dropdown.set(str(entry.get("name", "")))
+                row.set_percentage(float(entry.get("percentage", 0.0) or 0.0))
+
+            if not self._rows:          # an empty scenario still shows one blank row
+                self._add_row()
+        finally:
+            self._suspend = False
+        self._handle_change()
+
     def _ordered_for_category(self, category: Optional[str]) -> List[str]:
         if not self._category_materials or not category or category not in self._category_materials:
             return self._all_materials
@@ -179,6 +216,8 @@ class MaterialsPanel(ctk.CTkFrame):
         self._handle_change()
 
     def _handle_change(self) -> None:
+        if self._suspend:
+            return
         self._sum_indicator.update_total(self.total())
         if self._on_change is not None:
             self._on_change(self.materials())
