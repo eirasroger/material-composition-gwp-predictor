@@ -68,7 +68,7 @@ On startup the app checks GitHub Releases in the background. If a newer version 
 
 ## Installing (end users)
 
-1. Go to the [Releases page](https://github.com/eirasroger/material-composition-gwp-predictor/releases).
+1. Go to the [Releases page](https://github.com/eirasroger/material-composition-attribute-predictor/releases).
 2. Download `GHGPredictorSetup-<version>.exe`.
 3. Run it — no admin rights or UAC prompt needed.
 4. Launch from the Start Menu.
@@ -191,7 +191,7 @@ To test CI without cutting a release, use **Run workflow** on the Actions tab, w
 
 `updater.py` runs a background daemon thread on startup:
 
-1. Queries `api.github.com/repos/eirasroger/material-composition-gwp-predictor/releases/latest`.
+1. Queries `api.github.com/repos/eirasroger/material-composition-attribute-predictor/releases/latest`.
 2. If a newer `GHGPredictorSetup*.exe` asset is found, shows an update dialog.
 3. On acceptance: downloads the installer to a temp directory, then spawns a PowerShell process that waits for the app to close, runs the installer silently, and relaunches the new executable.
 

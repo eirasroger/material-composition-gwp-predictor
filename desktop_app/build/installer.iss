@@ -7,7 +7,7 @@
 #define MyAppName       "GHG Predictor"
 #define MyAppExeName    "GHGPredictor.exe"
 #define MyAppPublisher  "Material Composition GWP Predictor"
-#define MyAppURL        "https://github.com/eirasroger/material-composition-gwp-predictor"
+#define MyAppURL        "https://github.com/eirasroger/material-composition-attribute-predictor"
 
 ; Override on the iscc command line: /DMyAppVersion=1.0.0
 #ifndef MyAppVersion

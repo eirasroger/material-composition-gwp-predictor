@@ -22,7 +22,7 @@ from PIL import ImageTk
 
 from desktop_app.splash import _assets_dir, _build_frames
 
-GITHUB_REPO = "eirasroger/material-composition-gwp-predictor"
+GITHUB_REPO = "eirasroger/material-composition-attribute-predictor"
 _API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 _REQUEST_TIMEOUT = 8
 

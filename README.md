@@ -113,7 +113,7 @@ The category threshold is re-applied after filtering because each target drops a
 ## Project layout
 
 ```
-material-composition-gwp-predictor/
+material-composition-attribute-predictor/
 ├── main.py                          training entrypoint  →  python main.py [--target TARGET]
 ├── dataset.json                     labelled product dataset (not in git)
 ├── models/                          one checkpoint per target (25)
@@ -222,7 +222,7 @@ All paths and hyperparameters live in `src/config.py`.
 
 Packages the trained models into a standalone Windows installer — no Python, no configuration, no admin rights.
 
-**Install**: download `GHGPredictorSetup-<version>.exe` from the [Releases page](https://github.com/eirasroger/material-composition-gwp-predictor/releases), run it, and launch from the Start Menu. Updates install automatically.
+**Install**: download `GHGPredictorSetup-<version>.exe` from the [Releases page](https://github.com/eirasroger/material-composition-attribute-predictor/releases), run it, and launch from the Start Menu. Updates install automatically.
 
 **Features**
 
