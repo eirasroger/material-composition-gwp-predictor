@@ -29,29 +29,54 @@ fitz_datas, fitz_binaries, fitz_hidden = collect_all("fitz")
 # inference_adapter._default_assets_dir() and splash._assets_dir() find them
 # via sys._MEIPASS / assets.
 #
-# models/*.pt is globbed rather than listed by filename: bake_assets.py bakes
-# one checkpoint per trained target (currently 5 GHG stages, more indicators
-# later per docs/LEARNINGS.md 2026-07-25) and the exact set changes as new
-# targets are trained. A fixed file list here would silently drop new targets
-# from the frozen build -- see docs/LEARNINGS.md 2026-05-09 for the bug this
-# caused before (a forgotten asset_files entry -> silent fallback at runtime).
-_model_checkpoints = sorted((APP_DIR / "assets" / "models").glob("*.pt"))
+# Assets are DISCOVERED, not listed by name. A hand-maintained list has now
+# shipped a broken .exe twice, both times silently: category_materials.json
+# (docs/LEARNINGS.md 2026-05-09 -> alphabetical dropdowns) and
+# distributions.json (2026-07-27 -> every summary radar drawn identical,
+# because every reference lookup returned None). Runtime loaders treat these
+# files as optional, so a missing one degrades instead of crashing, and the
+# frozen build is the only place it can go missing. Discovery cannot forget.
+_ASSETS_DIR = APP_DIR / "assets"
+
+# Present in the source tree but deliberately not shipped.
+_EXCLUDED_ASSETS = {
+    "ghg_model.pt",  # legacy single-target checkpoint, superseded by models/
+    "icon.png",      # source art for icon.ico; nothing reads it at runtime
+}
+
+# Floor, not the full set: everything else discovered ships too. Listed so a
+# build against a stale/partial assets dir fails here rather than at the user's
+# desk. Keep in sync with what bake_assets.py writes.
+_REQUIRED_ASSETS = {
+    "targets_manifest.json", "distributions.json", "vocab.npz",
+    "materials.json", "category_materials.json",
+    "icon.ico", "icon_vector.svg", "theme_dark.json",
+}
+
+# models/*.pt is globbed too: bake_assets.py bakes one checkpoint per trained
+# target and the exact set changes as new targets are trained.
+_model_checkpoints = sorted((_ASSETS_DIR / "models").glob("*.pt"))
 if not _model_checkpoints:
     raise FileNotFoundError(
-        f"No checkpoints in {APP_DIR / 'assets' / 'models'}. "
+        f"No checkpoints in {_ASSETS_DIR / 'models'}. "
+        "Run desktop_app/tools/bake_assets.py before building."
+    )
+
+_top_level = sorted(
+    p for p in _ASSETS_DIR.iterdir()
+    if p.is_file() and p.name not in _EXCLUDED_ASSETS
+)
+_missing = _REQUIRED_ASSETS - {p.name for p in _top_level}
+if _missing:
+    raise FileNotFoundError(
+        f"Missing required asset(s) in {_ASSETS_DIR}: {sorted(_missing)}. "
         "Run desktop_app/tools/bake_assets.py before building."
     )
 
 asset_files = [
     (str(p), "assets/models") for p in _model_checkpoints
 ] + [
-    (str(APP_DIR / "assets" / "targets_manifest.json"),    "assets"),
-    (str(APP_DIR / "assets" / "vocab.npz"),                "assets"),
-    (str(APP_DIR / "assets" / "materials.json"),           "assets"),
-    (str(APP_DIR / "assets" / "category_materials.json"),  "assets"),
-    (str(APP_DIR / "assets" / "icon.ico"),                  "assets"),
-    (str(APP_DIR / "assets" / "icon_vector.svg"),           "assets"),
-    (str(APP_DIR / "assets" / "theme_dark.json"),           "assets"),
+    (str(p), "assets") for p in _top_level
 ]
 
 a = Analysis(

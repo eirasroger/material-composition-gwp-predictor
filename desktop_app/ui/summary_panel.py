@@ -31,6 +31,12 @@ Deliberately NOT drawn: the outer rim circle and radial ("median" / "10x")
 labels. The rim is where the log scale is clamped, not a value in the data, and
 labelling it invites "10x what?". The ring and band are explained once in the
 subtitle instead, in words.
+
+An indicator with no reference distribution draws NOTHING on its axis — the
+polygon breaks there. It used to be pinned to the median ring, which stated
+"exactly typical" about a product nothing was known about; with references
+missing across the board every product drew the same pentagon on the ring
+regardless of its values (docs/LEARNINGS.md 2026-07-27).
 """
 
 from __future__ import annotations
@@ -164,6 +170,23 @@ class SummaryPanel(ctk.CTkFrame):
         categories = list(dict.fromkeys(p.category for p in products))
         shared_category = len(categories) == 1
 
+        # Every axis of this chart is a ratio to a reference median. With no
+        # reference anywhere there is no chart — only a frame. Say so, and keep
+        # the table, which is the part that still carries information. (In
+        # practice this means distributions.json did not make it into the
+        # build; the runtime treats it as optional and degrades quietly.)
+        if not any(r.ref is not None for p in products for r in p.readings):
+            self._show_no_reference()
+            self._subtitle.configure(
+                text=(
+                    "No reference data in this build, so these predictions "
+                    "cannot be placed against typical products. The predicted "
+                    "values are listed below."
+                )
+            )
+            self._build_table(products)
+            return
+
         if n == 1 or shared_category:
             fig = Figure(figsize=(5.0, 5.4 if n == 1 else 5.8), dpi=_DPI)
             fig.patch.set_facecolor(SURFACE)
@@ -254,8 +277,11 @@ class SummaryPanel(ctk.CTkFrame):
         lo, hi, has_band = [], [], False
         for r in readings:
             if r.ref is None:
-                lo.append(_MEDIAN_R)
-                hi.append(_MEDIAN_R)
+                # NaN, not _MEDIAN_R: the band must break over an axis with no
+                # reference rather than pinch shut on the ring, which would draw
+                # a "typical range" of zero width out of no data at all.
+                lo.append(float("nan"))
+                hi.append(float("nan"))
                 continue
             has_band = True
             lo.append(_norm_radius(r.ref.p25 / r.ref.p50))
@@ -313,7 +339,12 @@ class SummaryPanel(ctk.CTkFrame):
         radii, off_scale = [], []
         for r in readings:
             if r.ref is None:
-                radii.append(_MEDIAN_R)
+                # No reference => no radial position exists. NaN breaks the line
+                # and drops the marker, leaving a visible gap. Placing it at
+                # _MEDIAN_R instead claimed "exactly typical" about an unknown,
+                # and made every product draw the same polygon when references
+                # were missing wholesale.
+                radii.append(float("nan"))
                 off_scale.append(False)
                 continue
             ratio = r.ref.ratio(r.value)
@@ -459,7 +490,16 @@ class SummaryPanel(ctk.CTkFrame):
         widget.configure(bg=SURFACE, highlightthickness=0)
         self._mpl_canvas.draw()
 
+    def _show_no_reference(self) -> None:
+        self._message(
+            "No reference data — nothing to compare against.\n"
+            "Reinstall or update the app to restore the comparison."
+        )
+
     def _show_empty(self) -> None:
+        self._message("Configure a product to see all indicators")
+
+    def _message(self, text: str) -> None:
         fig = Figure(figsize=(4.6, 2.4), dpi=_DPI)
         fig.patch.set_facecolor(SURFACE)
         ax = fig.add_subplot(111)
@@ -467,7 +507,7 @@ class SummaryPanel(ctk.CTkFrame):
         for spine in ax.spines.values():
             spine.set_visible(False)
         ax.text(
-            0.5, 0.5, "Configure a product to see all indicators",
+            0.5, 0.5, text,
             ha="center", va="center", color=TEXT_DIM, fontsize=11,
             transform=ax.transAxes,
         )
